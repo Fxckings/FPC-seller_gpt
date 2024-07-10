@@ -25,12 +25,13 @@ LOGGER_PREFIX = "GPT-SELLER"
 logger.info(f"{LOGGER_PREFIX} ЗАПУСТИЛСЯ!")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 DESCRIPTION = """
-Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты
+Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
 0.0.1 - бета тестик
 0.0.2 - настройка в тг
+0.0.3 - доработал стабильность
 """
 CREDITS = "@zeijuro"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -42,9 +43,9 @@ BLACKLIST_FILE = "storage/cache/blacklist.json" #Где находится ЧС
 g4f.debug.logging = True
 g4f.debug.version_check = True
 
-prompt_template = """Вы заместитель продавца Tinkovof в интернете на сайте игровых ценностей FunPay.
-К вам обращается покупатель, отвечайте ясно, информируйте и помогайте покупателю.
-На сайте FunPay продают различные услуги в играх, но никак не в реальной жизни.
+prompt_template = """Ты - заместитель продавца Tinkovof в интернете на сайте игровых ценностей FunPay.
+Помни, что ты всего лишь продавец на сайте.
+Помогай покупателям разобраться с товарам и проблемами. Отвечай КРАТНО и ПОДРОБНО только на русском языке, не выходи за "границы" общения.
 """
 
 groqapi = "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"
@@ -58,6 +59,7 @@ SETTINGS = {
     "prompt": prompt_template
 }
 
+#Клиент для ответов
 client = Client(api_key=SETTINGS["groqapi"])
 
 CBT_SWITCH = "CBTSWITCH"
@@ -182,16 +184,38 @@ def sanitize_response(response: str) -> str:
     :param response: Исходный текст ответа.
     :return: Очищенный текст ответа.
     """
-    unwanted_chars = "*#№%/@$%^&"
+    unwanted_chars = "*#№%/@$%^&<>[]"
     for char in unwanted_chars:
         response = response.replace(char, "")
     
     # Удаление ссылок из ответа
     response = re.sub(r'http[s]?://\S+', '', response)
+    response = re.sub('<br>', '', response)
     
     return response
 
-def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], price_of_lot: Optional[str], message_text: str, prompt: str) -> Optional[str]:
+def generate_response(messages: list, model: str, provider: str) -> Optional[str]:
+    """
+    Генерирует ответ от модели на основе предоставленных сообщений.
+
+    :param messages: Список сообщений для модели.
+    :param model: Модель для использования.
+    :param provider: Провайдер модели.
+    :return: Сгенерированный ответ или None в случае ошибки.
+    """
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            provider=provider,
+            messages=messages
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Ошибка при генерации ответа с моделью {model} и провайдером {provider}: {e}")
+        return None
+
+def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], 
+                    price_of_lot: Optional[str], message_text: str, prompt: str) -> Optional[str]:
     """
     Создает ответ на основе предоставленной информации и кэшированных данных.
 
@@ -208,6 +232,7 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
             {"role": "system", "content": prompt}
         ]
 
+        # Проверка кэшированных данных
         cached_info = get_cached_lot_info(chat_id)
         if cached_info:
             ru_full_lot_info = cached_info["ru_full_lot_info"]
@@ -220,31 +245,26 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
             messages += [
                 {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
                 {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
-                {"role": "assistant", "content": f"Цена лота: {price_of_lot}₽"},
-                {"role": "user", "content": "Можно заказать товар?"},
-                {"role": "assistant", "content": "Да."},
+                {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
                 {"role": "user", "content": message_text},
             ]
         else:
             messages += [
-                {"role": "user", "content": "Можно заказать товар?"},
-                {"role": "assistant", "content": "Да."},
+                {"role": "user", "content": "Чем могу помочь?"},
                 {"role": "user", "content": message_text},
             ]
 
-        response = client.chat.completions.create(
-            model="",
-            provider=Groq,
-            messages=messages
-        )
-
+        response = generate_response(messages, model="gpt-4", provider="You")
+        
+        # Попытка генерации ответа с другими настройками при неудаче
         if not response:
-            return None
+            response = generate_response(messages, model="", provider="Groq")
+            if not response:
+                return None
 
-        response_full = response.choices[0].message.content
-        sanitized_response = sanitize_response(response_full)
-
+        sanitized_response = sanitize_response(response)
         return sanitized_response
+
     except Exception as e:
         logger.error(f"Ошибка при создании ответа для чата {chat_id}: {e}")
         return None
@@ -291,10 +311,15 @@ def log_lot_info(ru_full_lot_info: str, ru_title_lot_info: str, price_of_lot: st
     logger.info(f"опис {ru_title_lot_info}")
     logger.info(f"цена {price_of_lot}")
 
+# Функция для поиска URL в тексте
+def contains_url(text: str) -> bool:
+    url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    return re.search(url_pattern, text) is not None
+
 def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
     try:
         if SETTINGS["send_response"]:
-
+            # Проверка на черный список
             if is_user_blacklisted(e.message.chat_name):
                 if SETTINGS['black_list_handle'] == False:
                     logger.info(f"{e.message.chat_name} в ЧС!")
@@ -302,17 +327,29 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
 
             msg = e.message
 
+            # Проверка на логирование информации о сообщении
             if not log_message_info(c, msg):
                 return
 
+            # Игнорирование сообщений, начинающихся с определенных символов или слов
             if msg.text.startswith(("!", "/", "https://", "t.me", "#", "да", "+", "Да", "дА")):
                 return
+            
+            # Проверка на длину сообщения и количество слов
+            if len(msg.text) < 10 or len(msg.text.split()) < 2:
+                return
 
+            # Добавляем проверку на наличие ссылки в сообщении
+            if contains_url(msg.text):
+                return
+
+            # Логирование информации о сообщении
             message_logger(c, e)
     except Exception as e:
         logger.error(e)
 
 def parse_lot_id(url: str) -> Optional[str]:
+
     """
     Парсит идентификатор лота из URL.
 
@@ -411,9 +448,8 @@ def notify_telegram(c: Cardinal, responce, question):
 
     if SETTINGS["notify_telegram"]:
         message = (
-            f"НОВОЕ СООБЩЕНИЕ К ЗАМЕСТИТЕЛЮ\n"
-            f"Вопрос: {question}\n"
-            f"Ответ: {responce}"
+            f"<b>Вопрос:</b> <code>{question}<code>\n\n"
+            f"<b>Ответ:</b> <code>{responce}</code>"
         )
 
         bot.send_message(c.telegram.authorized_users[0], f"💻 {LOGGER_PREFIX}\n\n{message}", parse_mode='HTML')
@@ -448,14 +484,33 @@ def init(c: Cardinal):
     def settings(call: telebot.types.CallbackQuery) -> None:
         try:
             keyboard = K()
+            
+            # Кнопка быстрого изменения
             keyboard.add(B("🚧 Изменить промпт", callback_data=CBT_PROMPT_CHANGE))
-            keyboard.add(B(f"⚡ Отправлять ответ {'🔔' if SETTINGS['send_response'] else '🔕'}", callback_data=f"{CBT_SWITCH}:send_response"))
-            keyboard.add(B(f"🔥 Отвечать ЧС челам {'🔔' if SETTINGS['black_list_handle'] else '🔕'}", callback_data=f"{CBT_SWITCH}:black_list_handle"))
-            keyboard.add(B(f"⭐ Отправлять уведомления {'🔔' if SETTINGS['notify_telegram'] else '🔕'}", callback_data=f"{CBT_SWITCH}:notify_telegram"))
+            
+            # Настройка отправки ответа с помощью отдельной кнопки-значка
+            keyboard.row(
+                B("Включен:", callback_data=f"{CBT_SWITCH}:send_response"),
+                B("✅" if SETTINGS['send_response'] else "❌", callback_data=f"{CBT_SWITCH}:send_response_icon")
+            )
+            
+            # Настройка дескриптора черного списка с помощью отдельной кнопки-значка
+            keyboard.row(
+                B("Отвечать ЧСникам:", callback_data=f"{CBT_SWITCH}:black_list_handle"),
+                B("✅" if SETTINGS['black_list_handle'] else "❌", callback_data=f"{CBT_SWITCH}:black_list_handle_icon")
+            )
+            
+            # Уведомить о настройке telegram с помощью отдельной кнопки-значка
+            keyboard.row(
+                B("Уведомления:", callback_data=f"{CBT_SWITCH}:notify_telegram"),
+                B("🔔" if SETTINGS['notify_telegram'] else "🔕", callback_data=f"{CBT_SWITCH}:notify_telegram_icon")
+            )
+            
+            # Кнопка "Назад"
             keyboard.row(B("◀️ Назад", callback_data=f"{CBT.EDIT_PLUGIN}:{UUID}:0"))
             
             message_text = (
-                "⚠️ Здесь вы можете настроить плагин."
+                "⚠️ Здесь вы можете настроить плагин.\n"
                 f"🚽 Если че писать сюда: {CREDITS}\n"
             )
             
@@ -515,6 +570,7 @@ def init(c: Cardinal):
                 raise ValueError("🔴 Недопустимый формат промпта")
             new_prompt_key = text
         except ValueError as e:
+            logger.info(e)
             bot.reply_to(message, f"🔴 Неправильный формат. Попробуйте снова.",
                         reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
             return
@@ -524,6 +580,7 @@ def init(c: Cardinal):
         save_config()
         bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
 
+    #Лишнее
     tg.cbq_handler(edit, lambda c: CBT_PROMPT_CHANGE in c.data)
     tg.msg_handler(edited_api, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
     tg.cbq_handler(toggle_send_response, lambda c: f"{CBT_SWITCH}:send_response" in c.data)
