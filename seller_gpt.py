@@ -1,5 +1,6 @@
 import subprocess
-import sys, requests
+import sys, requests, threading
+from threading import Thread
 import importlib
 
 # Функция для установки пакета с помощью pip
@@ -21,7 +22,7 @@ except ImportError:
     install_package("prophet")
     prophet = importlib.import_module("prophet")
 
-from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List
+from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List, Any
 from cardinal import Cardinal
 if TYPE_CHECKING:
     from cardinal import Cardinal
@@ -49,13 +50,14 @@ LOGGER_PREFIX = "GPT-SELLER"
 logger.info(f"{LOGGER_PREFIX} ЗАПУСТИЛСЯ!")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.4"
+VERSION = "0.0.5"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
 0.0.2 - настройка в тг
 0.0.3 - доработал стабильность
 0.0.4 - настройка в тг++
+0.0.5 - возможность обновиться через тг
 """
 CREDITS = "@zeijuro"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -240,6 +242,9 @@ def log_message_info(c: Cardinal, message) -> bool:
 
         if message.type != MessageTypes.NON_SYSTEM or message.author_id == c.account.id:
             return False
+        
+        if message.type == MessageTypes.DISCORD:
+            return False
 
         logger.info(f"Новое сообщение получено: {message.text}")
         return True
@@ -286,18 +291,42 @@ def is_user_blacklisted(username: str) -> bool:
 
 def sanitize_response(response: str) -> str:
     """
-    Удаляет нежелательные символы и ссылки из ответа.
+    Удаляет нежелательные символы, ссылки и запрещенные фразы из ответа.
 
     :param response: Исходный текст ответа.
     :return: Очищенный текст ответа.
     """
+    # Список нежелательных символов
     unwanted_chars = "*#№%/@$%^&<>[]"
+    
+    # Список запрещенных фраз
+    forbidden_phrases = [
+        "ggfunpay",
+        "playerok",
+        "zelenka.guru",
+        "zelenka",
+        "зеленка",
+        "секс",
+        "пенис",
+        "хуй",
+        "долбоеб",
+        "хакинг",
+        "взлом",
+        "брут",
+        "социальная инженерия"
+    ]
+    
+    # Удаление нежелательных символов
     for char in unwanted_chars:
         response = response.replace(char, "")
     
     # Удаление ссылок из ответа
     response = re.sub(r'http[s]?://\S+', '', response)
     response = re.sub('<br>', '', response)
+    
+    # Удаление запрещенных фраз
+    for phrase in forbidden_phrases:
+        response = response.replace(phrase, "")
     
     return response
 
@@ -321,25 +350,74 @@ def generate_response(messages: list, model: str, provider: str) -> Optional[str
         logger.error(f"Ошибка при генерации ответа с моделью {model} и провайдером {provider}: {e}")
         return None
 
-def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], 
-                    price_of_lot: Optional[str], message_text: str, prompt: str) -> Optional[str]:
+def generate_response(messages: List[Dict[str, Any]], model: str, provider: str) -> Optional[str]:
+    """
+    Генерирует ответ от модели на основе предоставленных сообщений.
+
+    :param messages: Список сообщений для модели.
+    :param model: используемая модель.
+    :param provider: Поставщик модели.
+    :return: Сгенерированный ответ или нет в случае ошибки.
+    """
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            provider=provider,
+            messages=messages
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Ошибка при генерации ответа с помощью модели {model} и поставщик услуг {provider}: {e}")
+        return None
+
+def build_messages(prompt: str, ru_full_lot_info: Optional[str], 
+                   ru_title_lot_info: Optional[str], price_of_lot: Optional[str], 
+                   message_text: str) -> List[Dict[str, str]]:
+    """
+    Создает список сообщений для модели hat.
+
+    :param prompt: Системное сообщение для генерации ответа.
+    :param ru_full_lot_info: Полная информация о вечеринке.
+    :param ru_title_lot_info: Название лота.
+    :param price_of_lot: Цена лота.
+    :param message_text: Сообщение пользователя.
+    :return: Список отформатированных сообщений.
+    """
+    messages = [{"role": "system", "content": prompt}]
+
+    if ru_full_lot_info:
+        messages += [
+            {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
+            {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
+            {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
+            {"role": "user", "content": "Я могу оплатить данный товар?"},
+            {"role": "assistant", "content": f"Да, конечно!"},
+            {"role": "user", "content": message_text},
+        ]
+    else:
+        messages += [
+            {"role": "user", "content": "Я могу оплатить товар?"},
+            {"role": "assistant", "content": f"Да, конечно, вы всегда можете!"},
+            {"role": "user", "content": message_text},
+        ]
+
+    return messages
+
+def create_response(chat_id: int, ru_full_lot_info: Optional[str], 
+                    ru_title_lot_info: Optional[str], price_of_lot: Optional[str], 
+                    message_text: str, prompt: str) -> Optional[str]:
     """
     Создает ответ на основе предоставленной информации и кэшированных данных.
 
     :param chat_id: Идентификатор чата.
-    :param ru_full_lot_info: Полная информация о лоте.
-    :param ru_title_lot_info: Название лота.
+    :param ru_full_lot_info: Полная информация о партии.
+    :param ru_title_lot_info: Название партии.
     :param price_of_lot: Цена лота.
-    :param message_text: Текст сообщения от пользователя.
+    :param message_text: Пользовательское сообщение.
     :param prompt: Системное сообщение для генерации ответа.
-    :return: Сгенерированный ответ или None в случае ошибки.
+    :return: Сгенерированный ответ или нет в случае ошибки.
     """
     try:
-        messages = [
-            {"role": "system", "content": prompt}
-        ]
-
-        # Проверка кэшированных данных
         cached_info = get_cached_lot_info(chat_id)
         if cached_info:
             ru_full_lot_info = cached_info["ru_full_lot_info"]
@@ -348,36 +426,37 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
         else:
             cache_lot_info(chat_id, ru_full_lot_info, ru_title_lot_info, price_of_lot)
 
-        if ru_full_lot_info:
-            messages += [
-                {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
-                {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
-                {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
-                {"role": "user", "content": "Я могу оплатить данный товар?"},
-                {"role": "assistant", "content": f"Да, конечно!"},
-                {"role": "user", "content": message_text},
-            ]
-        else:
-            messages += [
-                {"role": "user", "content": "Я могу оплатить товар?"},
-                {"role": "assistant", "content": f"Да, конечно, вы всегда можете!"},
-                {"role": "user", "content": message_text},
-            ]
+        messages = build_messages(prompt, ru_full_lot_info, ru_title_lot_info, price_of_lot, message_text)
+        response = generate_response(messages, model="gpt-4", provider="You")
 
-        response = generate_response(messages, model="gpt-4", provider=You)
-        
-        # Попытка генерации ответа с другими настройками при неудаче
         if not response:
-            response = generate_response(messages, model="", provider=Groq)
+            response = generate_response(messages, model="", provider="Groq")
             if not response:
                 return None
 
         sanitized_response = sanitize_response(response)
         return sanitized_response
-
     except Exception as e:
         logger.error(f"Ошибка при создании ответа для чата {chat_id}: {e}")
         return None
+
+def run_create_response_in_thread(chat_id: int, ru_full_lot_info: Optional[str], 
+                                  ru_title_lot_info: Optional[str], price_of_lot: Optional[str], 
+                                  message_text: str, prompt: str) -> None:
+    """
+    Запускает функцию create_response в отдельном потоке.
+
+    :param chat_id: Chat ID.
+    :param ru_full_lot_info: Полная информация о партии.
+    :param ru_title_lot_info: Название лота.
+    :param price_of_lot: Цена лота.
+    :param message_text: Сообщение пользователя.
+    :param prompt: Системное сообщение для генерации ответа.
+    """
+    thread = Thread(target=create_response, args=(chat_id, ru_full_lot_info, ru_title_lot_info, 
+                                                  price_of_lot, message_text, prompt))
+    thread.start()
+    thread.join()
 
 def message_logger(c: Cardinal, e: NewMessageEvent) -> None:
     """
@@ -400,38 +479,37 @@ def handle_message(c: Cardinal, chat_id: int, message_text: str) -> None:
     :param chat_id: Идентификатор чата.
     :param message_text: Текст сообщения от пользователя.
     """
+    # Получение информации о лоте
     ru_full_lot_info, ru_title_lot_info, price_of_lot = get_info(c, chat_id)
-    response = create_response(chat_id, ru_full_lot_info, ru_title_lot_info, price_of_lot, message_text, SETTINGS["prompt"])
 
-    if ru_full_lot_info:
-        log_lot_info(ru_full_lot_info, ru_title_lot_info, price_of_lot)
+    # Генерация ответа в отдельном потоке
+    response = run_create_response_in_thread(chat_id, ru_full_lot_info, ru_title_lot_info, 
+                                             price_of_lot, message_text, SETTINGS["prompt"])
 
-    c.send_message(chat_id, response)
-    notify_telegram(c, response, message_text)
-
-def log_lot_info(ru_full_lot_info: str, ru_title_lot_info: str, price_of_lot: str) -> None:
-    """
-    Логирует информацию о лоте.
-
-    :param ru_full_lot_info: Полная информация о лоте.
-    :param ru_title_lot_info: Название лота.
-    :param price_of_lot: Цена лота.
-    """
-    logger.info(f"лот {ru_full_lot_info}")
-    logger.info(f"опис {ru_title_lot_info}")
-    logger.info(f"цена {price_of_lot}")
+    # Отправка сообщения
+    if response:
+        c.send_message(chat_id, response)
+        notify_telegram(c, response, message_text)
+    else:
+        logger.error(f"Не удалось сгенерировать ответ для чата {chat_id}")
 
 # Функция для поиска URL в тексте
 def contains_url(text: str) -> bool:
     url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     return re.search(url_pattern, text) is not None
 
-def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
+def bind_to_new_message(c: Cardinal, e: 'NewMessageEvent') -> None:
+    """
+    Обрабатывает новое сообщение и выполняет различные проверки перед ответом.
+
+    :param c: Объект Cardinal.
+    :param e: Событие нового сообщения.
+    """
     try:
-        if SETTINGS["send_response"]:
+        if SETTINGS.get("send_response"):
             # Проверка на черный список
             if is_user_blacklisted(e.message.chat_name):
-                if SETTINGS['black_list_handle'] == False:
+                if not SETTINGS.get('black_list_handle', True):
                     logger.info(f"{e.message.chat_name} в ЧС!")
                     return
 
@@ -442,24 +520,24 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
                 return
 
             # Игнорирование сообщений, начинающихся с определенных символов или слов
-            if msg.text.startswith(("!", "/", "https://", "t.me", "#", "да", "+", "Да", "дА")):
+            ignored_prefixes = ("!", "/", "https://", "t.me", "#", "да", "+", "Да", "дА")
+            if msg.text.startswith(ignored_prefixes):
                 return
             
             # Проверка на длину сообщения и количество слов
             if len(msg.text) < 10 or len(msg.text.split()) < 2:
                 return
 
-            # Добавляем проверку на наличие ссылки в сообщении
+            # Проверка на наличие ссылки в сообщении
             if contains_url(msg.text):
                 return
 
             # Логирование информации о сообщении
             message_logger(c, e)
-    except Exception as e:
-        logger.error(e)
+    except Exception as ex:
+        logger.error(f"Ошибка при обработке сообщения: {ex}")
 
 def parse_lot_id(url: str) -> Optional[str]:
-
     """
     Парсит идентификатор лота из URL.
 
@@ -475,41 +553,53 @@ def parse_lot_id(url: str) -> Optional[str]:
         logger.error(f"Ошибка при разборе URL: {e}")
         return None
 
-def get_lot_fields(cardinal, lot_id: str) -> Optional[dict]:
+def get_lot_fields(cardinal: Any, lot_id: str) -> Optional[Dict[str, Any]]:
     """
     Получает данные лота по идентификатору.
 
-    :param cardinal: Объект cardinal для взаимодействия с API.
+    :param cardinal: Объект Cardinal для взаимодействия с API.
     :param lot_id: Идентификатор лота.
     :return: Словарь с данными лота, если данные найдены, иначе None.
     """
     try:
-        return cardinal.account.get_lot_fields(lot_id)
+        if not lot_id:
+            logger.error("Идентификатор лота не может быть пустым.")
+            return None
+        lot_fields = cardinal.account.get_lot_fields(lot_id)
+        if not lot_fields:
+            logger.info(f"Данные для лота с идентификатором {lot_id} не найдены.")
+            return None
+        return lot_fields
     except Exception as e:
         logger.error(f"Неожиданная ошибка при получении данных лота: {e}")
         return None
 
-def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_lot_information(cardinal: Any, lot_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Получает информацию о лоте.
 
-    :param cardinal: Объект cardinal для взаимодействия с API.
+    :param cardinal: Объект Cardinal для взаимодействия с API.
     :param lot_id: Идентификатор лота.
     :return: Кортеж, содержащий описание, название и цену лота. Если данные не найдены, возвращаются None.
     """
-    lot_data = get_lot_fields(cardinal, lot_id)
-    if lot_data:
-        description = lot_data.get('description_ru')
-        title = lot_data.get('title_ru')
-        price = lot_data.get('price')
-        
-        logger.info(f"Название: {title}")
-        logger.info(f"Описание: {description}")
-        logger.info(f"Цена: {price}")
-        
-        return description, title, price
-    else:
-        logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
+    try:
+        lot_data = get_lot_fields(cardinal, lot_id)
+        if lot_data:
+            description = lot_data.get('description_ru')
+            title = lot_data.get('title_ru')
+            price = lot_data.get('price')
+            
+            # Логирование полученной информации
+            logger.info(f"Название: {title}")
+            logger.info(f"Описание: {description}")
+            logger.info(f"Цена: {price}")
+            
+            return description, title, price
+        else:
+            logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
+            return None, None, None
+    except Exception as e:
+        logger.error(f"Ошибка при получении информации о лоте: {e}")
         return None, None, None
 
 def get_user_chat_data(cardinal, chat_id: int) -> Optional[dict]:
@@ -526,23 +616,26 @@ def get_user_chat_data(cardinal, chat_id: int) -> Optional[dict]:
         logger.error(f"Неожиданная ошибка при получении данных чата: {e}")
         return None
 
-def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_info(cardinal: Any, chat_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Получает информацию о лоте, который просматривает пользователь в чате.
 
-    :param cardinal: Объект cardinal для взаимодействия с API.
+    :param cardinal: Объект Cardinal для взаимодействия с API.
     :param chat_id: Идентификатор чата.
     :return: Кортеж, содержащий полную информацию о лоте, название лота и цену. Если данные не найдены, возвращаются None.
     """
     try:
+        # Получение данных пользователя по chat_id
         user_data = get_user_chat_data(cardinal, chat_id)
 
         if not user_data:
             logger.error(f"Не удалось получить данные пользователя для chat_id: {chat_id}")
             return None, None, None
 
-        if user_data.get('looking_link'):
-            lot_id = parse_lot_id(user_data['looking_link'])
+        # Проверка, просматривает ли пользователь какой-либо лот
+        looking_link = user_data.get('looking_link')
+        if looking_link:
+            lot_id = parse_lot_id(looking_link)
             if lot_id:
                 logger.info(f"Пользователь просматривает лот: {lot_id}")
                 return get_lot_information(cardinal, lot_id)
