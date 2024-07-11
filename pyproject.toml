@@ -1,5 +1,5 @@
 [build-system]
-requires = ["g4f", "requests", "telebot", "poetry-core"]
+requires = ["g4f", "requests", "telebot", "prophet", "poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
@@ -13,3 +13,4 @@ python = "^3.10.9"
 requests = "^2.25.1"
 g4f = "*"
 gitpython = "*"
+prophet = "*"
