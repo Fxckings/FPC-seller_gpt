@@ -1,5 +1,5 @@
 import subprocess
-import sys
+import sys, requests
 import importlib
 
 # Функция для установки пакета с помощью pip
@@ -13,6 +13,13 @@ except ImportError:
     install_package("g4f")
     install_package("g4f[webdriver]")
     g4f = importlib.import_module("g4f")
+
+# Добавляем проверку и установку для пакета prophet
+try:
+    import prophet
+except ImportError:
+    install_package("prophet")
+    prophet = importlib.import_module("prophet")
 
 from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List
 from cardinal import Cardinal
@@ -42,13 +49,14 @@ LOGGER_PREFIX = "GPT-SELLER"
 logger.info(f"{LOGGER_PREFIX} ЗАПУСТИЛСЯ!")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.3"
+VERSION = "0.0.5"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
 0.0.2 - настройка в тг
 0.0.3 - доработал стабильность
 0.0.4 - настройка в тг++
+0.0.5 - возможность обновиться через тг
 """
 CREDITS = "@zeijuro"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -99,6 +107,8 @@ CBT_NAME_EDITED = "NAME_EDITED_CBT"
 #Groq
 CBT_API_CHANGE = "NEW_API_GROQ"
 CBT_API_EDITED = "GROQ_API_EDITED"
+#Check Udated
+CHECK_UPDATES = "CHECK_NEW_VERVION"
 
 lot_cache: Dict[int, Dict[str, Optional[str]]] = {}
 
@@ -132,6 +142,52 @@ def cache_lot_info(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_i
         }
     except Exception as e:
         logger.error(e)
+
+# Функция для установки git, если он отсутствует
+def install_git():
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "gitpython"])
+        import git
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка установки git: {e}")
+        return False
+
+# Функция для проверки и установки обновлений с GitHub
+def check_and_update_package(github_repo: str):
+    try:
+        response = requests.get(f"https://api.github.com/repos/{github_repo}/releases/latest")
+        response.raise_for_status()
+        latest_version = response.json()['tag_name']
+        
+        current_version = VERSION # Убедитесь, что переменная VERSION определена
+        
+        if latest_version != current_version:
+            download_file_from_github(github_repo, "seller_gpt.py")
+            return f"Файл обновлен до версии {latest_version}."
+        else:
+            return "Вы используете последнюю версию."
+    except Exception as e:
+        return f"Не удалось проверить обновления: {str(e)}"
+
+def download_file_from_github(repo_url: str, file_path: str):
+    """
+    Загружает файл из репозитория GitHub по указанному пути.
+    
+    :param repo_url: URL репозитория на GitHub.
+    :param file_path: Путь к файлу в репозитории.
+    :return: None
+    """
+    # Получаем содержимое файла через API GitHub
+    file_url = f"https://raw.githubusercontent.com/{repo_url}/main/{file_path}"
+    response = requests.get(file_url)
+    
+    # Проверяем статус ответа
+    response.raise_for_status()
+    
+    # Сохраняем файл
+    with open(file_path, 'wb') as f:
+        f.write(response.content)
 
 def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
     try:
@@ -538,6 +594,9 @@ def init(c: Cardinal):
             # Уведомить о настройке telegram
             keyboard.row(*create_icon_button("Уведомления:", 'notify_telegram', 'notify_telegram'))
 
+            # Кнопка "Проверить обновления"
+            keyboard.row(B("🔄 Проверить обновления", callback_data=CHECK_UPDATES))
+
             # Кнопка "Назад"
             keyboard.row(B("◀️ Назад", callback_data=f"{CBT.EDIT_PLUGIN}:{UUID}:0"))
 
@@ -556,6 +615,16 @@ def init(c: Cardinal):
             bot.answer_callback_query(call.id)
         except Exception as e:
             logger.error(e)
+
+    def handle_update(call: telebot.types.CallbackQuery):
+        try:
+            github_repo = "alex117815/FPC-seller_gpt"  # repo
+            update_message = check_and_update_package(github_repo)
+
+            bot.answer_callback_query(call.id, text=update_message)
+        except Exception as e:
+            logger.error(e)
+            bot.answer_callback_query(call.id, text="Произошла ошибка при выполнении хэндлера Telegram бота.")
 
     def toggle_send_response(call: telebot.types.CallbackQuery):
         try:
@@ -643,7 +712,9 @@ def init(c: Cardinal):
     def edit_api(call: telebot.types.CallbackQuery):
         result = bot.send_message(call.message.chat.id,
                                 f"<b>🌈 Текущее значение:</b> {SETTINGS['groqapi']}\n\n"
-                                f"🔽 Введите новый промпт 🔽",
+                                f"Api брать с сайта: https://groq.com/"
+                                f"🔽 Введите новый api 🔽",
+                                
                                 reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
         tg.set_state(call.message.chat.id, result.id, call.from_user.id,
                     f"{CBT_API_EDITED}")
@@ -684,6 +755,8 @@ def init(c: Cardinal):
     #Сеттингс
     tg.cbq_handler(switch, lambda c: CBT_SWITCH in c.data)
     tg.cbq_handler(settings, lambda c: f"{CBT.PLUGIN_SETTINGS}:{UUID}" in c.data)
+    #Updates
+    tg.cbq_handler(handle_update, lambda c: CHECK_UPDATES in c.data)
 
 #Бинды
 BIND_TO_NEW_MESSAGE = [bind_to_new_message]
