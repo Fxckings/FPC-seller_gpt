@@ -1,0 +1,16 @@
+[build-system]
+requires = ["g4f", "requests", "telebot", "subprocess", "poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "FPC-seller_gpt"
+version = "0.0.4"
+description = "Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)"
+authors = ["Alex117815 <sasharazer0@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10.9"
+requests = "^2.25.1"
+g4f = "*"
+g4f[webdriver] = "*"
+gitpython = "*"
