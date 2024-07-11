@@ -1,7 +1,24 @@
+import subprocess
+import sys
+import importlib
+
+# Функция для установки пакета с помощью pip
+def install_package(package_name: str):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+
+# Проверьте, установлен ли g4f, если нет, установите его
+try:
+    import g4f
+except ImportError:
+    install_package("g4f")
+    install_package("g4f[webdriver]")
+    g4f = importlib.import_module("g4f")
+
 from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List
 from cardinal import Cardinal
 if TYPE_CHECKING:
     from cardinal import Cardinal
+
 from FunPayAPI.updater.events import NewOrderEvent, NewMessageEvent
 from FunPayAPI.types import MessageTypes
 import logging
@@ -15,7 +32,7 @@ import g4f
 from tg_bot import CBT
 import tg_bot.CBT
 from g4f.client import Client
-from g4f.Provider import Groq
+from g4f.Provider import Groq, You
 
 logger = logging.getLogger("FPC.GPTPLUG-IN")
 localizer = Localizer()
@@ -29,13 +46,21 @@ VERSION = "0.0.3"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
-0.0.1 - бета тестик
 0.0.2 - настройка в тг
 0.0.3 - доработал стабильность
+0.0.4 - настройка в тг++
 """
 CREDITS = "@zeijuro"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
 SETTINGS_PAGE = True
+
+# Константы для иконок
+CHECK_MARK = "✅"
+CROSS_MARK = "❌"
+BELL = "🔔"
+NO_BELL = "🔕"
+
+USERNAME = "Tinkovof"
 
 CONFIG_FILE = "storage/plugins/GPTseller.json" #Где находится конфиг
 BLACKLIST_FILE = "storage/cache/blacklist.json" #Где находится ЧС
@@ -43,11 +68,7 @@ BLACKLIST_FILE = "storage/cache/blacklist.json" #Где находится ЧС
 g4f.debug.logging = True
 g4f.debug.version_check = True
 
-prompt_template = """Ты - заместитель продавца Tinkovof в интернете на сайте игровых ценностей FunPay.
-Помни, что ты всего лишь продавец на сайте.
-Помогай покупателям разобраться с товарам и проблемами. Отвечай КРАТНО и ПОДРОБНО только на русском языке, не выходи за "границы" общения.
-"""
-
+#Получать с сайта: https://groq.com/
 groqapi = "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"
 
 SETTINGS = {
@@ -56,15 +77,28 @@ SETTINGS = {
     "black_list_handle": True,
     "notify_telegram": True,
     "notify_chatid": 0,
-    "prompt": prompt_template
+    "username": USERNAME,
+    "prompt": ""
 }
+
+SETTINGS['prompt'] = f"""Ты - заместитель продавца {SETTINGS['username']} на сайте игровых ценностей FunPay.
+Помогай покупателям разобраться с товарам и проблемами. Отвечай КРАТНО только на русском языке, пожалуйста, не употребляйте на сайте названия сторонних ресурсов. Если что-то не знаешь так и говори.
+"""
 
 #Клиент для ответов
 client = Client(api_key=SETTINGS["groqapi"])
 
+#Switch
 CBT_SWITCH = "CBTSWITCH"
-CBT_PROMPT_CHANGE = "NEW_PROMPT_YEA"
-CBT_PROMPT_EDITED = "PROMPTEDITEDLOL"
+#Prompt
+CBT_PROMPT_CHANGE = "NEW_PROMPT"
+CBT_PROMPT_EDITED = "PROMPT_EDITED"
+#Name
+CBT_NAME_CHANGE = "NAME_CHANGE_CBT"
+CBT_NAME_EDITED = "NAME_EDITED_CBT"
+#Groq
+CBT_API_CHANGE = "NEW_API_GROQ"
+CBT_API_EDITED = "GROQ_API_EDITED"
 
 lot_cache: Dict[int, Dict[str, Optional[str]]] = {}
 
@@ -105,12 +139,6 @@ def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
     except Exception as e:
         logger.error(e)
         return None
-
-def bind_to_new_order(c: Cardinal, event: NewOrderEvent):
-    try:
-        order_logger(c, event)
-    except Exception as e:
-        logger.error(e)
 
 def load_file(file_path: str) -> Union[List, Dict, None]:
     if not os.path.exists(file_path):
@@ -246,19 +274,22 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
                 {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
                 {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
                 {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
+                {"role": "user", "content": "Я могу оплатить данный товар?"},
+                {"role": "assistant", "content": f"Да, конечно!"},
                 {"role": "user", "content": message_text},
             ]
         else:
             messages += [
-                {"role": "user", "content": "Чем могу помочь?"},
+                {"role": "user", "content": "Я могу оплатить товар?"},
+                {"role": "assistant", "content": f"Да, конечно, вы всегда можете!"},
                 {"role": "user", "content": message_text},
             ]
 
-        response = generate_response(messages, model="gpt-4", provider="You")
+        response = generate_response(messages, model="gpt-4", provider=You)
         
         # Попытка генерации ответа с другими настройками при неудаче
         if not response:
-            response = generate_response(messages, model="", provider="Groq")
+            response = generate_response(messages, model="", provider=Groq)
             if not response:
                 return None
 
@@ -452,7 +483,7 @@ def notify_telegram(c: Cardinal, responce, question):
             f"<b>Ответ:</b> <code>{responce}</code>"
         )
 
-        bot.send_message(c.telegram.authorized_users[0], f"💻 {LOGGER_PREFIX}\n\n{message}", parse_mode='HTML')
+        bot.send_message(c.telegram.authorized_users[0], f"💻 <b>{LOGGER_PREFIX}</b>\n\n{message}", parse_mode='HTML')
 
 def init(c: Cardinal):
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
@@ -484,36 +515,37 @@ def init(c: Cardinal):
     def settings(call: telebot.types.CallbackQuery) -> None:
         try:
             keyboard = K()
-            
+
             # Кнопка быстрого изменения
             keyboard.add(B("🚧 Изменить промпт", callback_data=CBT_PROMPT_CHANGE))
-            
-            # Настройка отправки ответа с помощью отдельной кнопки-значка
-            keyboard.row(
-                B("Включен:", callback_data=f"{CBT_SWITCH}:send_response"),
-                B("✅" if SETTINGS['send_response'] else "❌", callback_data=f"{CBT_SWITCH}:send_response_icon")
-            )
-            
-            # Настройка дескриптора черного списка с помощью отдельной кнопки-значка
-            keyboard.row(
-                B("Отвечать ЧСникам:", callback_data=f"{CBT_SWITCH}:black_list_handle"),
-                B("✅" if SETTINGS['black_list_handle'] else "❌", callback_data=f"{CBT_SWITCH}:black_list_handle_icon")
-            )
-            
-            # Уведомить о настройке telegram с помощью отдельной кнопки-значка
-            keyboard.row(
-                B("Уведомления:", callback_data=f"{CBT_SWITCH}:notify_telegram"),
-                B("🔔" if SETTINGS['notify_telegram'] else "🔕", callback_data=f"{CBT_SWITCH}:notify_telegram_icon")
-            )
-            
+            keyboard.add(B("🚧 Изменить имя", callback_data=CBT_NAME_CHANGE))
+            keyboard.add(B("🚧 Изменить Groq Api", callback_data=CBT_API_CHANGE))
+
+            # Helper function to create icon buttons
+            def create_icon_button(label, setting_key, switch_key):
+                icon = CHECK_MARK if SETTINGS[setting_key] else CROSS_MARK
+                return [
+                    B(label, callback_data=f"{CBT_SWITCH}:{switch_key}"),
+                    B(icon, callback_data=f"{CBT_SWITCH}:{switch_key}_icon")
+                ]
+
+            # Настройка отправки ответа
+            keyboard.row(*create_icon_button("Включен:", 'send_response', 'send_response'))
+
+            # Настройка дескриптора черного списка
+            keyboard.row(*create_icon_button("Отвечать ЧСникам:", 'black_list_handle', 'black_list_handle'))
+
+            # Уведомить о настройке telegram
+            keyboard.row(*create_icon_button("Уведомления:", 'notify_telegram', 'notify_telegram'))
+
             # Кнопка "Назад"
             keyboard.row(B("◀️ Назад", callback_data=f"{CBT.EDIT_PLUGIN}:{UUID}:0"))
-            
+
             message_text = (
                 "⚠️ Здесь вы можете настроить плагин.\n"
                 f"🚽 Если че писать сюда: {CREDITS}\n"
             )
-            
+
             bot.edit_message_text(
                 message_text, 
                 call.message.chat.id, 
@@ -554,14 +586,14 @@ def init(c: Cardinal):
 
     def edit(call: telebot.types.CallbackQuery):
         result = bot.send_message(call.message.chat.id,
-                                f"<b>🌈Текущее значение:</b>{SETTINGS['prompt']}\n\n"
-                                f"🔽 Введите новое значение 🔽",
+                                f"<b>🌈 Текущее значение:</b> {SETTINGS['prompt']}\n\n"
+                                f"🔽 Введите новый промпт 🔽",
                                 reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
         tg.set_state(call.message.chat.id, result.id, call.from_user.id,
                     f"{CBT_PROMPT_EDITED}")
         bot.answer_callback_query(call.id)
 
-    def edited_api(message: telebot.types.Message):
+    def edited_key(message: telebot.types.Message):
         text = message.text
         key = "prompt"
         try:
@@ -580,17 +612,80 @@ def init(c: Cardinal):
         save_config()
         bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
 
-    #Лишнее
+    def edit_username(call: telebot.types.CallbackQuery):
+        result = bot.send_message(call.message.chat.id,
+                                f"<b>🌈 Текущее значение:</b> {SETTINGS['username']}\n\n"
+                                f"🔽 Введите свой ник 🔽",
+                                reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
+        tg.set_state(call.message.chat.id, result.id, call.from_user.id,
+                    f"{CBT_NAME_EDITED}")
+        bot.answer_callback_query(call.id)
+
+    def edited_username(message: telebot.types.Message):
+        text = message.text
+        key = "username"
+        try:
+            # Предполагая, что message.text является новым промптом
+            if not isinstance(text, str) or len(text) == 0:
+                raise ValueError("🔴 Недопустимый формат промпта")
+            new_prompt_key = text
+        except ValueError as e:
+            logger.info(e)
+            bot.reply_to(message, f"🔴 Неправильный формат. Попробуйте снова.",
+                        reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
+            return
+        tg.clear_state(message.chat.id, message.from_user.id, True)
+        keyboard = K().row(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}"))
+        SETTINGS[key] = new_prompt_key
+        save_config()
+        bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
+
+    def edit_api(call: telebot.types.CallbackQuery):
+        result = bot.send_message(call.message.chat.id,
+                                f"<b>🌈 Текущее значение:</b> {SETTINGS['groqapi']}\n\n"
+                                f"🔽 Введите новый промпт 🔽",
+                                reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
+        tg.set_state(call.message.chat.id, result.id, call.from_user.id,
+                    f"{CBT_API_EDITED}")
+        bot.answer_callback_query(call.id)
+
+    def edited_api(message: telebot.types.Message):
+        text = message.text
+        key = "groqapi"
+        try:
+            # Предполагая, что message.text является новым промптом
+            if not isinstance(text, str) or len(text) == 0:
+                raise ValueError("🔴 Недопустимый формат groqapi")
+            new_prompt_key = text
+        except ValueError as e:
+            logger.info(e)
+            bot.reply_to(message, f"🔴 Неправильный формат. Попробуйте снова.",
+                        reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
+            return
+        tg.clear_state(message.chat.id, message.from_user.id, True)
+        keyboard = K().row(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}"))
+        SETTINGS[key] = new_prompt_key
+        save_config()
+        bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
+
+    #Менять промпт
     tg.cbq_handler(edit, lambda c: CBT_PROMPT_CHANGE in c.data)
-    tg.msg_handler(edited_api, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
+    tg.msg_handler(edited_key, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
+    #Менять ник
+    tg.cbq_handler(edit_username, lambda c: CBT_NAME_CHANGE in c.data)
+    tg.msg_handler(edited_username, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_NAME_EDITED}"))
+    #Groq api
+    tg.cbq_handler(edit_api, lambda c: CBT_API_CHANGE in c.data)
+    tg.msg_handler(edited_api, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_API_EDITED}"))
+    #Переключатели
     tg.cbq_handler(toggle_send_response, lambda c: f"{CBT_SWITCH}:send_response" in c.data)
     tg.cbq_handler(toggle_handle_black_listed_users, lambda c: f"{CBT_SWITCH}:black_list_handle" in c.data)
     tg.cbq_handler(toggle_notify_telegram, lambda c: f"{CBT_SWITCH}:notify_telegram" in c.data)
+    #Сеттингс
     tg.cbq_handler(switch, lambda c: CBT_SWITCH in c.data)
     tg.cbq_handler(settings, lambda c: f"{CBT.PLUGIN_SETTINGS}:{UUID}" in c.data)
 
 #Бинды
 BIND_TO_NEW_MESSAGE = [bind_to_new_message]
-BIND_TO_NEW_ORDER = [bind_to_new_order]
 BIND_TO_DELETE = None
 BIND_TO_PRE_INIT = [init]
