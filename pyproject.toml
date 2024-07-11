@@ -12,5 +12,4 @@ authors = ["Alex117815 <sasharazer0@gmail.com>"]
 python = "^3.10.9"
 requests = "^2.25.1"
 g4f = "*"
-g4f[webdriver] = "*"
 gitpython = "*"
