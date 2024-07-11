@@ -49,14 +49,13 @@ LOGGER_PREFIX = "GPT-SELLER"
 logger.info(f"{LOGGER_PREFIX} ЗАПУСТИЛСЯ!")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.5"
+VERSION = "0.0.4"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
 0.0.2 - настройка в тг
 0.0.3 - доработал стабильность
 0.0.4 - настройка в тг++
-0.0.5 - возможность обновиться через тг
 """
 CREDITS = "@zeijuro"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -153,41 +152,65 @@ def install_git():
         logger.error(f"Ошибка установки git: {e}")
         return False
 
-# Функция для проверки и установки обновлений с GitHub
-def check_and_update_package(github_repo: str):
+def get_latest_release_info(github_repo: str) -> Optional[dict]:
     try:
         response = requests.get(f"https://api.github.com/repos/{github_repo}/releases/latest")
         response.raise_for_status()
-        latest_version = response.json()['tag_name']
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to get the latest release info: {e}")
+        return None
+
+def download_file_from_github(download_url: str, file_path: str) -> bool:
+    try:
+        response = requests.get(download_url)
+        response.raise_for_status()
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         
-        current_version = VERSION # Убедитесь, что переменная VERSION определена
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Existing file removed: {file_path}")
+
+        with open(file_path, 'wb') as f:
+            f.write(response.content)
         
-        if latest_version != current_version:
-            download_file_from_github(github_repo, "seller_gpt.py")
+        logger.info(f"File successfully downloaded and saved to: {file_path}")
+        return True
+    except requests.RequestException as e:
+        logger.error(f"Error downloading file: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return False
+
+def check_and_update_package(github_repo: str, file_name: str) -> str:
+    release_info = get_latest_release_info(github_repo)
+    if not release_info:
+        return "Не удалось получить информацию о последнем релизе."
+
+    latest_version = release_info['tag_name']
+    assets = release_info.get('assets', [])
+    asset = next((a for a in assets if a['name'] == file_name), None)
+
+    if asset:
+        # Определение пути к директории плагинов без повторного добавления 'plugins'
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Проверяем, существует ли директория 'plugins' и используем ее, если да
+        if os.path.exists(base_dir):
+            file_path = os.path.join(base_dir, file_name)
+        else:
+            logger.error("Директория plugins не найдена.")
+            return "Ошибка: директория plugins не найдена."
+
+        if download_file_from_github(asset['browser_download_url'], file_path):
             return f"Файл обновлен до версии {latest_version}."
         else:
-            return "Вы используете последнюю версию."
-    except Exception as e:
-        return f"Не удалось проверить обновления: {str(e)}"
-
-def download_file_from_github(repo_url: str, file_path: str):
-    """
-    Загружает файл из репозитория GitHub по указанному пути.
-    
-    :param repo_url: URL репозитория на GitHub.
-    :param file_path: Путь к файлу в репозитории.
-    :return: None
-    """
-    # Получаем содержимое файла через API GitHub
-    file_url = f"https://raw.githubusercontent.com/{repo_url}/main/{file_path}"
-    response = requests.get(file_url)
-    
-    # Проверяем статус ответа
-    response.raise_for_status()
-    
-    # Сохраняем файл
-    with open(file_path, 'wb') as f:
-        f.write(response.content)
+            return "Ошибка при загрузке файла."
+    else:
+        logger.info(f"Файл {file_name} не найден в последнем релизе.")
+        return "Файл не найден в последнем релизе."
 
 def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
     try:
@@ -618,12 +641,20 @@ def init(c: Cardinal):
 
     def handle_update(call: telebot.types.CallbackQuery):
         try:
-            github_repo = "alex117815/FPC-seller_gpt"  # repo
-            update_message = check_and_update_package(github_repo)
-
+            github_repo = "alex117815/FPC-seller_gpt"
+            file_name = "seller_gpt.py"
+            update_message = check_and_update_package(github_repo, file_name)
             bot.answer_callback_query(call.id, text=update_message)
+
+            if "обновлен до версии" in update_message:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                logger.info(base_dir)
+                file_path = os.path.join(base_dir, file_name)
+                
+                with open(file_path, 'rb') as file:
+                    bot.send_document(call.message.chat.id, file)
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Error in Telegram bot handler: {e}")
             bot.answer_callback_query(call.id, text="Произошла ошибка при выполнении хэндлера Telegram бота.")
 
     def toggle_send_response(call: telebot.types.CallbackQuery):
