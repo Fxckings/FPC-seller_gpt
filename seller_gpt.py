@@ -1,65 +1,69 @@
 import subprocess
-import sys, requests, threading
-from threading import Thread
+import sys, requests
 import importlib
 
 # Функция для установки пакета с помощью pip
 def install_package(package_name: str):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
 
-# Проверьте, установлен ли g4f, если нет, установите его
-try:
-    import g4f
-except ImportError:
-    install_package("g4f")
-    install_package("g4f[webdriver]")
-    g4f = importlib.import_module("g4f")
+install_package('numpy==1.26.4')
 
 # Добавляем проверку и установку для пакета prophet
 try:
+    import Groq
+    import g4f
+    import curl_cffi
     import prophet
+    import numpy
 except ImportError:
-    install_package("prophet")
+    install_package("groq")
+    install_package("g4f")
+    install_package('curl_cffi')
+    install_package('prophet')
+    install_package('numpy')
+    groq = importlib.import_module("groq")
+    g4f = importlib.import_module("g4f")
+    curl_cffi = importlib.import_module("curl_cffi")
     prophet = importlib.import_module("prophet")
 
-from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List, Any
+from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List
 from cardinal import Cardinal
 if TYPE_CHECKING:
     from cardinal import Cardinal
 
-from FunPayAPI.updater.events import NewOrderEvent, NewMessageEvent
+from FunPayAPI.updater.events import NewMessageEvent
 from FunPayAPI.types import MessageTypes
 import logging
+from os.path import exists
 import telebot
 import json
 import os, re
 from telebot.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
 from urllib.parse import urlparse, parse_qs
 from locales.localizer import Localizer
-import g4f
 from tg_bot import CBT
-import tg_bot.CBT
+from groq import Groq
+from g4f.Provider import You
 from g4f.client import Client
-from g4f.Provider import Groq, You
 
-logger = logging.getLogger("FPC.GPTPLUG-IN")
+logger = logging.getLogger("FPC.ChatGPT-Seller")
 localizer = Localizer()
 _ = localizer.translate
 
-LOGGER_PREFIX = "GPT-SELLER"
-logger.info(f"{LOGGER_PREFIX} ЗАПУСТИЛСЯ!")
+LOGGER_PREFIX = "ChatGPT-Seller"
+logger.info(f"{LOGGER_PREFIX} Активен")
 
 NAME = "ChatGPT-Seller"
 VERSION = "0.0.5"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
-0.0.2 - настройка в тг
 0.0.3 - доработал стабильность
 0.0.4 - настройка в тг++
-0.0.5 - возможность обновиться через тг
+0.0.5 - убрано все говно
+0.0.6 - small bugs fix and improvements
 """
-CREDITS = "@zeijuro"
+CREDITS = "@cloudecode при помощи @vsevolodezz"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
 SETTINGS_PAGE = True
 
@@ -69,42 +73,27 @@ CROSS_MARK = "❌"
 BELL = "🔔"
 NO_BELL = "🔕"
 
-USERNAME = "Tinkovof"
-
-CONFIG_FILE = "storage/plugins/GPTseller.json" #Где находится конфиг
-BLACKLIST_FILE = "storage/cache/blacklist.json" #Где находится ЧС
-
-g4f.debug.logging = True
-g4f.debug.version_check = True
-
-#Получать с сайта: https://groq.com/
-groqapi = "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"
-
 SETTINGS = {
-    "groqapi": groqapi,
+    "api_key": "",
     "send_response": True,
     "black_list_handle": True,
-    "notify_telegram": True,
-    "notify_chatid": 0,
-    "username": USERNAME,
-    "prompt": ""
+    "prompt": "Ты - заместитель продавца на сайте игровых ценностей FunPay. Помогай покупателям разобраться с товарам и проблемами. Отвечай КРАТНО только на русском языке, пожалуйста, не употребляйте на сайте названия сторонних ресурсов. Если что-то не знаешь так и говори."
 }
 
-SETTINGS['prompt'] = f"""Ты - заместитель продавца {SETTINGS['username']} на сайте игровых ценностей FunPay.
-Помогай покупателям разобраться с товарам и проблемами. Отвечай КРАТНО только на русском языке, пожалуйста, не употребляйте на сайте названия сторонних ресурсов. Если что-то не знаешь так и говори.
-"""
-
-#Клиент для ответов
-client = Client(api_key=SETTINGS["groqapi"])
+BAD_WORDS = {
+    'ggfunpay',
+    'zelenka',
+    'зеленка',
+    'порно',
+    'playerok',
+    'плеерок'
+}
 
 #Switch
 CBT_SWITCH = "CBTSWITCH"
 #Prompt
 CBT_PROMPT_CHANGE = "NEW_PROMPT"
 CBT_PROMPT_EDITED = "PROMPT_EDITED"
-#Name
-CBT_NAME_CHANGE = "NAME_CHANGE_CBT"
-CBT_NAME_EDITED = "NAME_EDITED_CBT"
 #Groq
 CBT_API_CHANGE = "NEW_API_GROQ"
 CBT_API_EDITED = "GROQ_API_EDITED"
@@ -113,26 +102,6 @@ CHECK_UPDATES = "CHECK_NEW_VERVION"
 
 lot_cache: Dict[int, Dict[str, Optional[str]]] = {}
 
-def save_file(file_path: str, data: Union[List, Dict]) -> None:
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except (IOError, TypeError) as e:
-        logger.error(f"Ошибка при сохранении файла {file_path}: {e}")
-
-def log_order_info(order):
-    try:
-        logger.info(f"Новый заказ получен: {order}")
-        logger.info(f"Сумма заказа: {order.amount}")
-    except Exception as e:
-        logger.error(e)
-
-def order_logger(c: Cardinal, e: NewOrderEvent):
-    try:
-        order = e.order
-        log_order_info(order)
-    except Exception as e:
-        logger.error(e)
 
 def cache_lot_info(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], price_of_lot: Optional[str]):
     try:
@@ -143,16 +112,6 @@ def cache_lot_info(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_i
         }
     except Exception as e:
         logger.error(e)
-
-# Функция для установки git, если он отсутствует
-def install_git():
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "gitpython"])
-        import git
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка установки git: {e}")
-        return False
 
 def get_latest_release_info(github_repo: str) -> Optional[dict]:
     try:
@@ -165,18 +124,11 @@ def get_latest_release_info(github_repo: str) -> Optional[dict]:
 
 def download_file_from_github(download_url: str, file_path: str) -> bool:
     try:
-        response = requests.get(download_url)
-        response.raise_for_status()
-
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.info(f"Existing file removed: {file_path}")
-
-        with open(file_path, 'wb') as f:
-            f.write(response.content)
-        
+        with requests.get(download_url, stream=True) as response:
+            response.raise_for_status()
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
         logger.info(f"File successfully downloaded and saved to: {file_path}")
         return True
     except requests.RequestException as e:
@@ -187,24 +139,16 @@ def download_file_from_github(download_url: str, file_path: str) -> bool:
         return False
 
 def check_and_update_package(github_repo: str, file_name: str) -> str:
-    release_info = get_latest_release_info(github_repo)
+    release_info = get_latest_release_assets(github_repo)
     if not release_info:
         return "Не удалось получить информацию о последнем релизе."
 
-    latest_version = release_info['tag_name']
-    assets = release_info.get('assets', [])
+    latest_version, assets = release_info
     asset = next((a for a in assets if a['name'] == file_name), None)
 
     if asset:
-        # Определение пути к директории плагинов без повторного добавления 'plugins'
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Проверяем, существует ли директория 'plugins' и используем ее, если да
-        if os.path.exists(base_dir):
-            file_path = os.path.join(base_dir, file_name)
-        else:
-            logger.error("Директория plugins не найдена.")
-            return "Ошибка: директория plugins не найдена."
+        base_dir = os.path.dirname(__file__)
+        file_path = os.path.join(base_dir, file_name)
 
         if download_file_from_github(asset['browser_download_url'], file_path):
             return f"Файл обновлен до версии {latest_version}."
@@ -214,36 +158,48 @@ def check_and_update_package(github_repo: str, file_name: str) -> str:
         logger.info(f"Файл {file_name} не найден в последнем релизе.")
         return "Файл не найден в последнем релизе."
 
-def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
+
+def get_latest_release_assets(github_repo: str) -> Optional[Tuple[str, List[dict]]]:
     try:
-        return lot_cache.get(chat_id)
-    except Exception as e:
-        logger.error(e)
+        response = requests.get(f"https://api.github.com/repos/{github_repo}/releases/latest")
+        response.raise_for_status()
+        release_info = response.json()
+        return release_info['tag_name'], release_info.get('assets', [])
+    except requests.RequestException as e:
+        logger.error(f"Failed to get the latest release info: {e}")
         return None
+
+def check_if_need_update() -> bool:
+    try:
+        release_info = get_latest_release_info("alex117815/FPC-seller_gpt")
+        return release_info and release_info['tag_name'] > VERSION
+    except Exception:
+        return False
+
+def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
+    return lot_cache.get(chat_id)
 
 def load_file(file_path: str) -> Union[List, Dict, None]:
-    if not os.path.exists(file_path):
-        logger.warning(f"Файл {file_path} не существует.")
-        return None
-
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error(f"Ошибка декодирования JSON в файле {file_path}: {e}")
+        with open(file_path, 'rb') as f:
+            return json.loads(f.read().decode('utf-8'))
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при загрузке данных из файла {file_path}: {e}")
     return None
 
 def log_message_info(c: Cardinal, message) -> bool:
+    """
+    логирует информацию о сообщении
+
+    :param c: The Cardinal instance.
+    :param message: The message to log.
+    :return: True if the message was logged successfully, False otherwise.
+    """
     try:
         bot_username = c.account.username
         logger.info(f"Автор сообщения: {message.author}, Имя текущего бота: {bot_username}")
 
         if message.type != MessageTypes.NON_SYSTEM or message.author_id == c.account.id:
-            return False
-        
-        if message.type == MessageTypes.DISCORD:
             return False
 
         logger.info(f"Новое сообщение получено: {message.text}")
@@ -252,172 +208,74 @@ def log_message_info(c: Cardinal, message) -> bool:
         logger.error(e)
         return False
 
-def load_blacklist(file_path: str) -> List[str]:
-    """
-    Загружает черный список из указанного файла.
-
-    :param file_path: Путь к файлу черного списка.
-    :return: Список имен пользователей из черного списка.
-    :raises FileNotFoundError: Если файл не найден.
-    :raises json.JSONDecodeError: Если произошла ошибка при расшифровке файла.
-    """
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return json.load(file)
-    except FileNotFoundError as e:
-        logger.error(f"Файл с черным списком {file_path} не найдено.")
-        raise e
-    except json.JSONDecodeError as e:
-        logger.error(f"Ошибка при расшифровке файла черного списка {file_path}.")
-        raise e
-
-def is_user_blacklisted(username: str) -> bool:
-    """
-    Проверяет, находится ли пользователь в черном списке.
-
-    :param username: Имя пользователя для проверки.
-    :return: True, если пользователь находится в черном списке, иначе False.
-    """
-    try:
-        blacklist = load_blacklist(BLACKLIST_FILE)
-        return username in blacklist
-    except FileNotFoundError:
-        return False
-    except json.JSONDecodeError:
-        return False
-    except Exception as e:
-        logger.error(f"Непредвиденная ошибка при проверке черного списка для пользователя {username}: {e}")
-        return False
-
 def sanitize_response(response: str) -> str:
     """
-    Удаляет нежелательные символы, ссылки и запрещенные фразы из ответа.
+    Удалите ненужные символы, ссылки и сообщения из ответа.
 
-    :param response: Исходный текст ответа.
-    :return: Очищенный текст ответа.
+    :param response: The original response text.
+    :return: The cleaned response text.
     """
-    # Список нежелательных символов
-    unwanted_chars = "*#№%/@$%^&<>[]"
-    
-    # Список запрещенных фраз
-    forbidden_phrases = [
-        "ggfunpay",
-        "playerok",
-        "zelenka.guru",
-        "zelenka",
-        "зеленка",
-        "секс",
-        "пенис",
-        "хуй",
-        "долбоеб",
-        "хакинг",
-        "взлом",
-        "брут",
-        "социальная инженерия"
-    ]
-    
-    # Удаление нежелательных символов
-    for char in unwanted_chars:
-        response = response.replace(char, "")
-    
-    # Удаление ссылок из ответа
-    response = re.sub(r'http[s]?://\S+', '', response)
-    response = re.sub('<br>', '', response)
-    
-    # Удаление запрещенных фраз
-    for phrase in forbidden_phrases:
-        response = response.replace(phrase, "")
-    
+
+    # Удаляйте ненужные символы и ненормативные слова с помощью регулярных выражений
+    response = re.sub(r'[*\#№%/@$%^&<>[\]]', '', response)
+    response = re.sub(r'\b({})\b'.format('|'.join(BAD_WORDS)), '', response)
+
+    # Удалите ссылки и HTML-теги из ответа
+    response = re.sub(r'(http[s]?://\S+|<br>|<h1>|<h2>|<h3>|<p>|</p>)', '', response)
+
     return response
 
-def generate_response(messages: list, model: str, provider: str) -> Optional[str]:
+def generate_response(messages: list, model: str) -> Optional[str]:
     """
     Генерирует ответ от модели на основе предоставленных сообщений.
 
     :param messages: Список сообщений для модели.
     :param model: Модель для использования.
-    :param provider: Провайдер модели.
     :return: Сгенерированный ответ или None в случае ошибки.
     """
     try:
-        response = client.chat.completions.create(
+        response = Groq(api_key=SETTINGS["api_key"]).chat.completions.create(
             model=model,
-            provider=provider,
-            messages=messages
+            messages=messages,
+            temperature=0
         )
-        return response.choices[0].message.content
+        if response.choices[0].message.content:
+            return response.choices[0].message.content
     except Exception as e:
-        logger.error(f"Ошибка при генерации ответа с моделью {model} и провайдером {provider}: {e}")
-        return None
+        logger.error(f"Error generating a response with the Groq client: {e}")
 
-def generate_response(messages: List[Dict[str, Any]], model: str, provider: str) -> Optional[str]:
-    """
-    Генерирует ответ от модели на основе предоставленных сообщений.
-
-    :param messages: Список сообщений для модели.
-    :param model: используемая модель.
-    :param provider: Поставщик модели.
-    :return: Сгенерированный ответ или нет в случае ошибки.
-    """
     try:
-        response = client.chat.completions.create(
-            model=model,
-            provider=provider,
-            messages=messages
+        response = Client().chat.completions.create(
+            model="claude-3-opus",
+            messages=messages,
+            temperature=0
         )
-        return response.choices[0].message.content
+        if response.choices[0].message.content:
+            return response.choices[0].message.content
     except Exception as e:
-        logger.error(f"Ошибка при генерации ответа с помощью модели {model} и поставщик услуг {provider}: {e}")
-        return None
+        logger.error(f"Error generating a response with the You client: {e}")
 
-def build_messages(prompt: str, ru_full_lot_info: Optional[str], 
-                   ru_title_lot_info: Optional[str], price_of_lot: Optional[str], 
-                   message_text: str) -> List[Dict[str, str]]:
-    """
-    Создает список сообщений для модели hat.
+    return None
 
-    :param prompt: Системное сообщение для генерации ответа.
-    :param ru_full_lot_info: Полная информация о вечеринке.
-    :param ru_title_lot_info: Название лота.
-    :param price_of_lot: Цена лота.
-    :param message_text: Сообщение пользователя.
-    :return: Список отформатированных сообщений.
-    """
-    messages = [{"role": "system", "content": prompt}]
-
-    if ru_full_lot_info:
-        messages += [
-            {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
-            {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
-            {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
-            {"role": "user", "content": "Я могу оплатить данный товар?"},
-            {"role": "assistant", "content": f"Да, конечно!"},
-            {"role": "user", "content": message_text},
-        ]
-    else:
-        messages += [
-            {"role": "user", "content": "Я могу оплатить товар?"},
-            {"role": "assistant", "content": f"Да, конечно, вы всегда можете!"},
-            {"role": "user", "content": message_text},
-        ]
-
-    return messages
-
-def create_response(chat_id: int, ru_full_lot_info: Optional[str], 
-                    ru_title_lot_info: Optional[str], price_of_lot: Optional[str], 
-                    message_text: str, prompt: str) -> Optional[str]:
+def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], 
+                    price_of_lot: Optional[str], message_text: str, prompt: str) -> Optional[str]:
     """
     Создает ответ на основе предоставленной информации и кэшированных данных.
 
     :param chat_id: Идентификатор чата.
-    :param ru_full_lot_info: Полная информация о партии.
-    :param ru_title_lot_info: Название партии.
+    :param ru_full_lot_info: Полная информация о лоте.
+    :param ru_title_lot_info: Название лота.
     :param price_of_lot: Цена лота.
-    :param message_text: Пользовательское сообщение.
+    :param message_text: Текст сообщения от пользователя.
     :param prompt: Системное сообщение для генерации ответа.
-    :return: Сгенерированный ответ или нет в случае ошибки.
+    :return: Сгенерированный ответ или None в случае ошибки.
     """
     try:
+        messages = [
+            {"role": "system", "content": prompt}
+        ]
+
+        # Проверка кэшированных данных
         cached_info = get_cached_lot_info(chat_id)
         if cached_info:
             ru_full_lot_info = cached_info["ru_full_lot_info"]
@@ -426,37 +284,27 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str],
         else:
             cache_lot_info(chat_id, ru_full_lot_info, ru_title_lot_info, price_of_lot)
 
-        messages = build_messages(prompt, ru_full_lot_info, ru_title_lot_info, price_of_lot, message_text)
-        response = generate_response(messages, model="gpt-4", provider="You")
-
-        if not response:
-            response = generate_response(messages, model="", provider="Groq")
-            if not response:
-                return None
-
+        if ru_full_lot_info:
+            messages += [
+                {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
+                {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
+                {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
+                {"role": "user", "content": "Я могу оплатить данный товар?"},
+                {"role": "assistant", "content": f"Да, конечно!"},
+                {"role": "user", "content": message_text},
+            ]
+        else:
+            messages += [
+                {"role": "user", "content": "Я могу оплатить товар?"},
+                {"role": "assistant", "content": f"Да, конечно, вы всегда можете!"},
+                {"role": "user", "content": message_text},
+            ]
+        response = generate_response(messages, model="llama3-70b-8192")
         sanitized_response = sanitize_response(response)
         return sanitized_response
     except Exception as e:
         logger.error(f"Ошибка при создании ответа для чата {chat_id}: {e}")
         return None
-
-def run_create_response_in_thread(chat_id: int, ru_full_lot_info: Optional[str], 
-                                  ru_title_lot_info: Optional[str], price_of_lot: Optional[str], 
-                                  message_text: str, prompt: str) -> None:
-    """
-    Запускает функцию create_response в отдельном потоке.
-
-    :param chat_id: Chat ID.
-    :param ru_full_lot_info: Полная информация о партии.
-    :param ru_title_lot_info: Название лота.
-    :param price_of_lot: Цена лота.
-    :param message_text: Сообщение пользователя.
-    :param prompt: Системное сообщение для генерации ответа.
-    """
-    thread = Thread(target=create_response, args=(chat_id, ru_full_lot_info, ru_title_lot_info, 
-                                                  price_of_lot, message_text, prompt))
-    thread.start()
-    thread.join()
 
 def message_logger(c: Cardinal, e: NewMessageEvent) -> None:
     """
@@ -479,63 +327,71 @@ def handle_message(c: Cardinal, chat_id: int, message_text: str) -> None:
     :param chat_id: Идентификатор чата.
     :param message_text: Текст сообщения от пользователя.
     """
-    # Получение информации о лоте
     ru_full_lot_info, ru_title_lot_info, price_of_lot = get_info(c, chat_id)
+    response = create_response(chat_id, ru_full_lot_info, ru_title_lot_info, price_of_lot, message_text, SETTINGS["prompt"])
 
-    # Генерация ответа в отдельном потоке
-    response = run_create_response_in_thread(chat_id, ru_full_lot_info, ru_title_lot_info, 
-                                             price_of_lot, message_text, SETTINGS["prompt"])
+    if ru_full_lot_info:
+        log_lot_info(ru_full_lot_info, ru_title_lot_info, price_of_lot)
 
-    # Отправка сообщения
-    if response:
-        c.send_message(chat_id, response)
-        notify_telegram(c, response, message_text)
-    else:
-        logger.error(f"Не удалось сгенерировать ответ для чата {chat_id}")
+    c.send_message(chat_id, response)
 
-# Функция для поиска URL в тексте
+def log_lot_info(ru_full_lot_info: str, ru_title_lot_info: str, price_of_lot: str) -> None:
+    """
+    Логирует информацию о лоте.
+
+    :param ru_full_lot_info: Полная информация о лоте.
+    :param ru_title_lot_info: Название лота.
+    :param price_of_lot: Цена лота.
+    """
+    logger.info(f"лот {ru_full_lot_info}")
+    logger.info(f"опис {ru_title_lot_info}")
+    logger.info(f"цена {price_of_lot}")
+
 def contains_url(text: str) -> bool:
+    """
+    Есть ли ссылки в тексте, если да - удаляем
+    """
     url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     return re.search(url_pattern, text) is not None
 
-def bind_to_new_message(c: Cardinal, e: 'NewMessageEvent') -> None:
+def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
     """
-    Обрабатывает новое сообщение и выполняет различные проверки перед ответом.
+    Обработчик новых сообщений.
 
-    :param c: Объект Cardinal.
-    :param e: Событие нового сообщения.
+    :param c: The Cardinal instance.
+    :param e: The NewMessageEvent instance.
     """
     try:
-        if SETTINGS.get("send_response"):
+        if SETTINGS["send_response"]:
             # Проверка на черный список
-            if is_user_blacklisted(e.message.chat_name):
-                if not SETTINGS.get('black_list_handle', True):
+            if e.message.chat_name in c.blacklist:
+                if SETTINGS['black_list_handle'] == False:
                     logger.info(f"{e.message.chat_name} в ЧС!")
                     return
 
             msg = e.message
+            msg = msg.lower()
 
             # Проверка на логирование информации о сообщении
             if not log_message_info(c, msg):
                 return
 
             # Игнорирование сообщений, начинающихся с определенных символов или слов
-            ignored_prefixes = ("!", "/", "https://", "t.me", "#", "да", "+", "Да", "дА")
-            if msg.text.startswith(ignored_prefixes):
+            if msg.text.startswith(("!", "/", "https://", "t.me", "#", "да", "+", "Да", "дА", 'no', '-', "нет")):
                 return
             
-            # Проверка на длину сообщения и количество слов
+            # Проверка на длину сообщения и количество слов --> если сообщение слишком короткое, не отвечаем на него
             if len(msg.text) < 10 or len(msg.text.split()) < 2:
                 return
 
-            # Проверка на наличие ссылки в сообщении
+            # Добавляем проверку на наличие ссылки в сообщении
             if contains_url(msg.text):
                 return
 
             # Логирование информации о сообщении
             message_logger(c, e)
-    except Exception as ex:
-        logger.error(f"Ошибка при обработке сообщения: {ex}")
+    except Exception as e:
+        logger.error(e)
 
 def parse_lot_id(url: str) -> Optional[str]:
     """
@@ -553,53 +409,41 @@ def parse_lot_id(url: str) -> Optional[str]:
         logger.error(f"Ошибка при разборе URL: {e}")
         return None
 
-def get_lot_fields(cardinal: Any, lot_id: str) -> Optional[Dict[str, Any]]:
+def get_lot_fields(cardinal, lot_id: str) -> Optional[dict]:
     """
     Получает данные лота по идентификатору.
 
-    :param cardinal: Объект Cardinal для взаимодействия с API.
+    :param cardinal: Объект cardinal для взаимодействия с API.
     :param lot_id: Идентификатор лота.
     :return: Словарь с данными лота, если данные найдены, иначе None.
     """
     try:
-        if not lot_id:
-            logger.error("Идентификатор лота не может быть пустым.")
-            return None
-        lot_fields = cardinal.account.get_lot_fields(lot_id)
-        if not lot_fields:
-            logger.info(f"Данные для лота с идентификатором {lot_id} не найдены.")
-            return None
-        return lot_fields
+        return cardinal.account.get_lot_fields(lot_id)
     except Exception as e:
         logger.error(f"Неожиданная ошибка при получении данных лота: {e}")
         return None
 
-def get_lot_information(cardinal: Any, lot_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Получает информацию о лоте.
 
-    :param cardinal: Объект Cardinal для взаимодействия с API.
+    :param cardinal: Объект cardinal для взаимодействия с API.
     :param lot_id: Идентификатор лота.
     :return: Кортеж, содержащий описание, название и цену лота. Если данные не найдены, возвращаются None.
     """
-    try:
-        lot_data = get_lot_fields(cardinal, lot_id)
-        if lot_data:
-            description = lot_data.get('description_ru')
-            title = lot_data.get('title_ru')
-            price = lot_data.get('price')
-            
-            # Логирование полученной информации
-            logger.info(f"Название: {title}")
-            logger.info(f"Описание: {description}")
-            logger.info(f"Цена: {price}")
-            
-            return description, title, price
-        else:
-            logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
-            return None, None, None
-    except Exception as e:
-        logger.error(f"Ошибка при получении информации о лоте: {e}")
+    lot_data = get_lot_fields(cardinal, lot_id)
+    if lot_data:
+        description = lot_data.get('description_ru')
+        title = lot_data.get('title_ru')
+        price = lot_data.get('price')
+        
+        logger.info(f"Название: {title}")
+        logger.info(f"Описание: {description}")
+        logger.info(f"Цена: {price}")
+        
+        return description, title, price
+    else:
+        logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
         return None, None, None
 
 def get_user_chat_data(cardinal, chat_id: int) -> Optional[dict]:
@@ -616,26 +460,23 @@ def get_user_chat_data(cardinal, chat_id: int) -> Optional[dict]:
         logger.error(f"Неожиданная ошибка при получении данных чата: {e}")
         return None
 
-def get_info(cardinal: Any, chat_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Получает информацию о лоте, который просматривает пользователь в чате.
 
-    :param cardinal: Объект Cardinal для взаимодействия с API.
+    :param cardinal: Объект cardinal для взаимодействия с API.
     :param chat_id: Идентификатор чата.
     :return: Кортеж, содержащий полную информацию о лоте, название лота и цену. Если данные не найдены, возвращаются None.
     """
     try:
-        # Получение данных пользователя по chat_id
         user_data = get_user_chat_data(cardinal, chat_id)
 
         if not user_data:
             logger.error(f"Не удалось получить данные пользователя для chat_id: {chat_id}")
             return None, None, None
 
-        # Проверка, просматривает ли пользователь какой-либо лот
-        looking_link = user_data.get('looking_link')
-        if looking_link:
-            lot_id = parse_lot_id(looking_link)
+        if user_data.get('looking_link'):
+            lot_id = parse_lot_id(user_data['looking_link'])
             if lot_id:
                 logger.info(f"Пользователь просматривает лот: {lot_id}")
                 return get_lot_information(cardinal, lot_id)
@@ -646,26 +487,24 @@ def get_info(cardinal: Any, chat_id: int) -> Tuple[Optional[str], Optional[str],
         logger.error(f"Неожиданная ошибка при получении информации: {e}")
         return None, None, None
 
-def notify_telegram(c: Cardinal, responce, question):
-    bot = c.telegram.bot
-
-    if SETTINGS["notify_telegram"]:
-        message = (
-            f"<b>Вопрос:</b> <code>{question}<code>\n\n"
-            f"<b>Ответ:</b> <code>{responce}</code>"
-        )
-
-        bot.send_message(c.telegram.authorized_users[0], f"💻 <b>{LOGGER_PREFIX}</b>\n\n{message}", parse_mode='HTML')
-
 def init(c: Cardinal):
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-
-    global SETTINGS
-
-    save_file(CONFIG_FILE, SETTINGS)
-
     tg = c.telegram
     bot = tg.bot
+
+    #проверяем можно ли обновиться до новой версии
+    can_update = check_if_need_update()
+    if can_update:
+        bot.send_message(c.telegram.authorized_users[0], f'🚨 Внимание!\nДоступно обновление плагина {LOGGER_PREFIX}, перейдите в настройки плагина чтобы обновить его')
+
+    if exists("storage/plugins/GPTseller.json"):
+        with open("storage/plugins/GPTseller.json", "r", encoding="UTF-8") as f:
+            global SETTINGS
+            SETTINGS = json.loads(f.read())
+
+    def save_config():
+        with open("storage/plugins/GPTseller.json", "w", encoding="UTF-8") as f:
+            global SETTINGS
+            f.write(json.dumps(SETTINGS, indent=4, ensure_ascii=False))
 
     def switch(call: telebot.types.CallbackQuery):
         try:
@@ -677,21 +516,13 @@ def init(c: Cardinal):
         except Exception as e:
             logger.error(e)
 
-    def save_config():
-        try:
-            with open(CONFIG_FILE, "w", encoding="UTF-8") as f:
-                f.write(json.dumps(SETTINGS, indent=4, ensure_ascii=False))
-        except Exception as e:
-            logger.error(e)
-
     def settings(call: telebot.types.CallbackQuery) -> None:
         try:
             keyboard = K()
 
             # Кнопка быстрого изменения
-            keyboard.add(B("🚧 Изменить промпт", callback_data=CBT_PROMPT_CHANGE))
-            keyboard.add(B("🚧 Изменить имя", callback_data=CBT_NAME_CHANGE))
-            keyboard.add(B("🚧 Изменить Groq Api", callback_data=CBT_API_CHANGE))
+            keyboard.add(B("🚧 Изменить PROMPT", callback_data=CBT_PROMPT_CHANGE))
+            keyboard.add(B("🚧 Изменить api_key", callback_data=CBT_API_CHANGE))
 
             # Helper function to create icon buttons
             def create_icon_button(label, setting_key, switch_key):
@@ -706,9 +537,6 @@ def init(c: Cardinal):
 
             # Настройка дескриптора черного списка
             keyboard.row(*create_icon_button("Отвечать ЧСникам:", 'black_list_handle', 'black_list_handle'))
-
-            # Уведомить о настройке telegram
-            keyboard.row(*create_icon_button("Уведомления:", 'notify_telegram', 'notify_telegram'))
 
             # Кнопка "Проверить обновления"
             keyboard.row(B("🔄 Проверить обновления", callback_data=CHECK_UPDATES))
@@ -746,23 +574,14 @@ def init(c: Cardinal):
                 
                 with open(file_path, 'rb') as file:
                     bot.send_document(call.message.chat.id, file)
+                    bot.send_message(call.message.chat.id, "🚀 Обновление успешно завершено.\n/restart чтобы обновление работало.")
         except Exception as e:
             logger.error(f"Error in Telegram bot handler: {e}")
             bot.answer_callback_query(call.id, text="Произошла ошибка при выполнении хэндлера Telegram бота.")
 
     def toggle_send_response(call: telebot.types.CallbackQuery):
         try:
-            SETTINGS["notify_chatid"] = call.message.chat.id
             SETTINGS["send_response"] = not SETTINGS.get("send_response", False)
-            save_config()
-            settings(call)
-        except Exception as e:
-            logger.error(e)
-
-    def toggle_notify_telegram(call: telebot.types.CallbackQuery):
-        try:
-            SETTINGS["notify_chatid"] = call.message.chat.id
-            SETTINGS["notify_telegram"] = not SETTINGS.get("notify_telegram", False)
             save_config()
             settings(call)
         except Exception as e:
@@ -770,112 +589,55 @@ def init(c: Cardinal):
 
     def toggle_handle_black_listed_users(call: telebot.types.CallbackQuery):
         try:
-            SETTINGS["notify_chatid"] = call.message.chat.id
             SETTINGS["black_list_handle"] = not SETTINGS.get("black_list_handle", False)
             save_config()
             settings(call)
         except Exception as e:
             logger.error(e)
 
-    def edit(call: telebot.types.CallbackQuery):
-        result = bot.send_message(call.message.chat.id,
-                                f"<b>🌈 Текущее значение:</b> {SETTINGS['prompt']}\n\n"
-                                f"🔽 Введите новый промпт 🔽",
-                                reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
-        tg.set_state(call.message.chat.id, result.id, call.from_user.id,
-                    f"{CBT_PROMPT_EDITED}")
-        bot.answer_callback_query(call.id)
+    def edit_prompt(call: telebot.types.CallbackQuery):
+        if call.data != f"{CBT.PLUGIN_SETTINGS}:{UUID}:0":
+            msg = bot.send_message(call.message.chat.id, f"Ваш прошлый PROMPT:<code>{SETTINGS['prompt']}</code>\n\nВведите новый промпт:")
+            bot.register_next_step_handler(msg, edited_prompt)
 
-    def edited_key(message: telebot.types.Message):
-        text = message.text
-        key = "prompt"
+    def edited_prompt(message: telebot.types.Message):
         try:
-            # Предполагая, что message.text является новым промптом
-            if not isinstance(text, str) or len(text) == 0:
-                raise ValueError("🔴 Недопустимый формат промпта")
-            new_prompt_key = text
-        except ValueError as e:
-            logger.info(e)
-            bot.reply_to(message, f"🔴 Неправильный формат. Попробуйте снова.",
-                        reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
-            return
-        tg.clear_state(message.chat.id, message.from_user.id, True)
-        keyboard = K().row(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}"))
-        SETTINGS[key] = new_prompt_key
-        save_config()
-        bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
-
-    def edit_username(call: telebot.types.CallbackQuery):
-        result = bot.send_message(call.message.chat.id,
-                                f"<b>🌈 Текущее значение:</b> {SETTINGS['username']}\n\n"
-                                f"🔽 Введите свой ник 🔽",
-                                reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
-        tg.set_state(call.message.chat.id, result.id, call.from_user.id,
-                    f"{CBT_NAME_EDITED}")
-        bot.answer_callback_query(call.id)
-
-    def edited_username(message: telebot.types.Message):
-        text = message.text
-        key = "username"
-        try:
-            # Предполагая, что message.text является новым промптом
-            if not isinstance(text, str) or len(text) == 0:
-                raise ValueError("🔴 Недопустимый формат промпта")
-            new_prompt_key = text
-        except ValueError as e:
-            logger.info(e)
-            bot.reply_to(message, f"🔴 Неправильный формат. Попробуйте снова.",
-                        reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
-            return
-        tg.clear_state(message.chat.id, message.from_user.id, True)
-        keyboard = K().row(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}"))
-        SETTINGS[key] = new_prompt_key
-        save_config()
-        bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
+            new_prompt = message.text
+            SETTINGS["prompt"] = new_prompt
+            save_config()
+            tg.clear_state(message.chat.id, message.from_user.id, True)
+            keyboard = K()
+            keyboard.add(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}:0"))
+            bot.reply_to(message, f"🟢 Новый промпт установлен: <code>{new_prompt}</code>", reply_markup=keyboard)
+        except Exception as e:
+            bot.delete_message(message.chat.id, message.id)
 
     def edit_api(call: telebot.types.CallbackQuery):
-        result = bot.send_message(call.message.chat.id,
-                                f"<b>🌈 Текущее значение:</b> {SETTINGS['groqapi']}\n\n"
-                                f"Api брать с сайта: https://groq.com/"
-                                f"🔽 Введите новый api 🔽",
-                                
-                                reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
-        tg.set_state(call.message.chat.id, result.id, call.from_user.id,
-                    f"{CBT_API_EDITED}")
-        bot.answer_callback_query(call.id)
+        if call.data!= f"{CBT.PLUGIN_SETTINGS}:{UUID}:0":
+            msg = bot.send_message(call.message.chat.id, f"Введите новый API-KEY:")
+            bot.register_next_step_handler(msg, edited_api)
 
     def edited_api(message: telebot.types.Message):
-        text = message.text
-        key = "groqapi"
         try:
-            # Предполагая, что message.text является новым промптом
-            if not isinstance(text, str) or len(text) == 0:
-                raise ValueError("🔴 Недопустимый формат groqapi")
-            new_prompt_key = text
-        except ValueError as e:
-            logger.info(e)
-            bot.reply_to(message, f"🔴 Неправильный формат. Попробуйте снова.",
-                        reply_markup=tg_bot.static_keyboards.CLEAR_STATE_BTN())
-            return
-        tg.clear_state(message.chat.id, message.from_user.id, True)
-        keyboard = K().row(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}"))
-        SETTINGS[key] = new_prompt_key
-        save_config()
-        bot.reply_to(message, f"✅ Успех: {new_prompt_key}", reply_markup=keyboard)
+            new_api_key = message.text
+            SETTINGS["api_key"] = new_api_key
+            save_config()
+            tg.clear_state(message.chat.id, message.from_user.id, True)
+            keyboard = K()
+            keyboard.add(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}:0"))
+            bot.reply_to(message, f"🟢 Новый API-KEY установлен: <code>{new_api_key}</code>", reply_markup=keyboard)
+        except Exception as e:
+            bot.delete_message(message.chat.id, message.id)
 
     #Менять промпт
-    tg.cbq_handler(edit, lambda c: CBT_PROMPT_CHANGE in c.data)
-    tg.msg_handler(edited_key, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
-    #Менять ник
-    tg.cbq_handler(edit_username, lambda c: CBT_NAME_CHANGE in c.data)
-    tg.msg_handler(edited_username, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_NAME_EDITED}"))
+    tg.cbq_handler(edit_prompt, lambda c: CBT_PROMPT_CHANGE in c.data)
+    tg.msg_handler(edited_prompt, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
     #Groq api
     tg.cbq_handler(edit_api, lambda c: CBT_API_CHANGE in c.data)
     tg.msg_handler(edited_api, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_API_EDITED}"))
     #Переключатели
     tg.cbq_handler(toggle_send_response, lambda c: f"{CBT_SWITCH}:send_response" in c.data)
     tg.cbq_handler(toggle_handle_black_listed_users, lambda c: f"{CBT_SWITCH}:black_list_handle" in c.data)
-    tg.cbq_handler(toggle_notify_telegram, lambda c: f"{CBT_SWITCH}:notify_telegram" in c.data)
     #Сеттингс
     tg.cbq_handler(switch, lambda c: CBT_SWITCH in c.data)
     tg.cbq_handler(settings, lambda c: f"{CBT.PLUGIN_SETTINGS}:{UUID}" in c.data)
