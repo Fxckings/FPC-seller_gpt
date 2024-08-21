@@ -54,16 +54,13 @@ LOGGER_PREFIX = "ChatGPT-Seller"
 logger.info(f"{LOGGER_PREFIX} Активен")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.5"
+VERSION = "0.0.7"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
-0.0.3 - доработал стабильность
-0.0.4 - настройка в тг++
-0.0.5 - убрано все говно
-0.0.6 - small bugs fix and improvements
+0.0.7 - теперь работает)
 """
-CREDITS = "@cloudecode при помощи @vsevolodezz"
+CREDITS = "@cloudecode"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
 SETTINGS_PAGE = True
 
@@ -145,6 +142,8 @@ def check_and_update_package(github_repo: str, file_name: str) -> str:
 
     latest_version, assets = release_info
     asset = next((a for a in assets if a['name'] == file_name), None)
+    if VERSION == latest_version:
+        return f"Версия {latest_version} уже установлена. Она является последним релизом."
 
     if asset:
         base_dir = os.path.dirname(__file__)
@@ -370,7 +369,7 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
                     return
 
             msg = e.message
-            msg = msg.lower()
+            msg = msg.text.lower()
 
             # Проверка на логирование информации о сообщении
             if not log_message_info(c, msg):
@@ -567,16 +566,17 @@ def init(c: Cardinal):
             update_message = check_and_update_package(github_repo, file_name)
             bot.answer_callback_query(call.id, text=update_message)
 
-            if "обновлен до версии" in update_message:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                logger.info(base_dir)
-                file_path = os.path.join(base_dir, file_name)
-                
-                with open(file_path, 'rb') as file:
-                    bot.send_document(call.message.chat.id, file)
-                    bot.send_message(call.message.chat.id, "🚀 Обновление успешно завершено.\n/restart чтобы обновление работало.")
+            if "обновлен до версии" not in update_message:
+                return
+
+            file_path = os.path.abspath(__file__)
+            file_path = os.path.join(os.path.dirname(file_path), file_name)
+
+            with open(file_path, 'rb') as file:
+                bot.send_chat_action(call.message.chat.id, "upload_document")
+                bot.send_document(call.message.chat.id, file, caption="🚀 Обновление успешно завершено.\n/restart чтобы обновление работало.")
         except Exception as e:
-            logger.error(f"Error in Telegram bot handler: {e}")
+            logger.exception("Error in Telegram bot handler")
             bot.answer_callback_query(call.id, text="Произошла ошибка при выполнении хэндлера Telegram бота.")
 
     def toggle_send_response(call: telebot.types.CallbackQuery):
