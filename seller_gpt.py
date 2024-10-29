@@ -322,12 +322,7 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
 
             if not log_message_info(c, msg):
                 return
-            
             msg = msg.text.lower()
-            
-            if len(msg) < 10 or len(msg.split()) < 2:
-                return
-
             if contains_url(msg):
                 return
 
