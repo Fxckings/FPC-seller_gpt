@@ -354,19 +354,23 @@ def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[
     :param lot_id: Идентификатор лота.
     :return: Кортеж, содержащий описание, название и цену лота. Если данные не найдены, возвращаются None.
     """
-    lot_data = cardinal.account.get_lot_fields(lot_id)
-    if lot_data:
-        description = lot_data.get('description_ru')
-        title = lot_data.get('title_ru')
-        price = lot_data.get('price')
-        
-        logger.info(f"Название: {title}")
-        logger.info(f"Описание: {description}")
-        logger.info(f"Цена: {price}")
-        
-        return description, title, price
-    else:
-        logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
+    try:
+        lot_data = cardinal.account.get_lot_fields(lot_id)
+        if lot_data:
+            description = lot_data.description_ru
+            title = lot_data.title_ru
+            price = lot_data.price
+
+            logger.info(f"Название: {title}")
+            logger.info(f"Описание: {description}")
+            logger.info(f"Цена: {price}")
+
+            return description, title, price
+        else:
+            logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
+            return None, None, None
+    except Exception as e:
+        logger.error(f"Ошибка при получении информации о лоте: {e}")
         return None, None, None
 
 def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
