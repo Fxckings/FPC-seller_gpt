@@ -1,50 +1,30 @@
-import subprocess
-import sys, requests
-import importlib
+from __future__ import annotations
 
-# Функция для установки пакета с помощью pip
-def install_package(package_name: str):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
-
-install_package('numpy==1.26.4')
-
-# Добавляем проверку и установку для пакета prophet
-try:
-    import Groq
-    import g4f
-    import curl_cffi
-    import prophet
-    import numpy
-except ImportError:
-    install_package("groq")
-    install_package("g4f")
-    install_package('curl_cffi')
-    install_package('prophet')
-    install_package('numpy')
-    groq = importlib.import_module("groq")
-    g4f = importlib.import_module("g4f")
-    curl_cffi = importlib.import_module("curl_cffi")
-    prophet = importlib.import_module("prophet")
-
+import requests
 from typing import TYPE_CHECKING, Optional, Tuple, Dict, Union, List
-from cardinal import Cardinal
-if TYPE_CHECKING:
-    from cardinal import Cardinal
+from cardinal import Cardinal # type: ignore
 
-from FunPayAPI.updater.events import NewMessageEvent
-from FunPayAPI.types import MessageTypes
+if TYPE_CHECKING:
+    from cardinal import Cardinal # type: ignore
+
+from FunPayAPI.updater.events import NewMessageEvent # type: ignore
+from FunPayAPI.types import MessageTypes # type: ignore
 import logging
 from os.path import exists
-import telebot
+import telebot # type: ignore
 import json
-import os, re
-from telebot.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
-from urllib.parse import urlparse, parse_qs
-from locales.localizer import Localizer
-from tg_bot import CBT
-from groq import Groq
-from g4f.Provider import You
-from g4f.client import Client
+import os, re 
+from telebot.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B # type: ignore
+from urllib.parse import urlparse, parse_qs # type: ignore
+from locales.localizer import Localizer # type: ignore
+from tg_bot import CBT # type: ignore
+from pip._internal.cli.main import main
+
+try:
+    from g4f.client import Client # type: ignore
+except ImportError:
+    main(["install", "g4f"])
+    from g4f.client import Client
 
 logger = logging.getLogger("FPC.ChatGPT-Seller")
 localizer = Localizer()
@@ -54,11 +34,12 @@ LOGGER_PREFIX = "ChatGPT-Seller"
 logger.info(f"{LOGGER_PREFIX} Активен")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.7"
+VERSION = "0.0.8"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
-0.0.7 - теперь работает)
+
+0.0.8 - sigma update
 """
 CREDITS = "@cloudecode"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -74,7 +55,21 @@ SETTINGS = {
     "api_key": "",
     "send_response": True,
     "black_list_handle": True,
-    "prompt": "Ты - заместитель продавца на сайте игровых ценностей FunPay. Помогай покупателям разобраться с товарам и проблемами. Отвечай КРАТНО только на русском языке, пожалуйста, не употребляйте на сайте названия сторонних ресурсов. Если что-то не знаешь так и говори."
+    "prompt": """
+Ты - заместитель продавца на сайте игровых ценностей FunPay. Ты являешься помошником одного из тысячи продавцов.
+
+Твои задачи:
+
+Кратко и чётко отвечать на вопросы покупателей на русском языке
+Помогать с выбором товаров
+Решать проблемы с заказами
+Объяснять правила и механики работы сайта
+Не рекламировать и не упоминать другие торговые площадки
+Честно признавать, если чего-то не знаю
+Соблюдать вежливость и профессионализм
+Защищать интересы как покупателей, так и продавцов
+
+"""
 }
 
 BAD_WORDS = {
@@ -86,19 +81,14 @@ BAD_WORDS = {
     'плеерок'
 }
 
-#Switch
 CBT_SWITCH = "CBTSWITCH"
-#Prompt
 CBT_PROMPT_CHANGE = "NEW_PROMPT"
 CBT_PROMPT_EDITED = "PROMPT_EDITED"
-#Groq
 CBT_API_CHANGE = "NEW_API_GROQ"
 CBT_API_EDITED = "GROQ_API_EDITED"
-#Check Udated
 CHECK_UPDATES = "CHECK_NEW_VERVION"
 
 lot_cache: Dict[int, Dict[str, Optional[str]]] = {}
-
 
 def cache_lot_info(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], price_of_lot: Optional[str]):
     try:
@@ -214,16 +204,13 @@ def sanitize_response(response: str) -> str:
     :param response: The original response text.
     :return: The cleaned response text.
     """
-
-    # Удаляйте ненужные символы и ненормативные слова с помощью регулярных выражений
     response = re.sub(r'[*\#№%/@$%^&<>[\]]', '', response)
     response = re.sub(r'\b({})\b'.format('|'.join(BAD_WORDS)), '', response)
-
-    # Удалите ссылки и HTML-теги из ответа
     response = re.sub(r'(http[s]?://\S+|<br>|<h1>|<h2>|<h3>|<p>|</p>)', '', response)
 
     return response
 
+RESPONSE_CACHE = {}
 def generate_response(messages: list, model: str) -> Optional[str]:
     """
     Генерирует ответ от модели на основе предоставленных сообщений.
@@ -233,26 +220,20 @@ def generate_response(messages: list, model: str) -> Optional[str]:
     :return: Сгенерированный ответ или None в случае ошибки.
     """
     try:
-        response = Groq(api_key=SETTINGS["api_key"]).chat.completions.create(
+        key = str((model, tuple(sorted(messages))))
+        if key in RESPONSE_CACHE:
+            return RESPONSE_CACHE[key]
+
+        response = Client().chat.completions.create(
             model=model,
             messages=messages,
-            temperature=0
         )
-        if response.choices[0].message.content:
-            return response.choices[0].message.content
+        RESPONSE_CACHE[key] = response.choices[0].message.content
+        
+        return RESPONSE_CACHE[key]
+        
     except Exception as e:
         logger.error(f"Error generating a response with the Groq client: {e}")
-
-    try:
-        response = Client().chat.completions.create(
-            model="claude-3-opus",
-            messages=messages,
-            temperature=0
-        )
-        if response.choices[0].message.content:
-            return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Error generating a response with the You client: {e}")
 
     return None
 
@@ -271,10 +252,13 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
     """
     try:
         messages = [
-            {"role": "system", "content": prompt}
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": "Я могу оплатить данный товар?"},
+            {"role": "assistant", "content": f"Да, конечно!"},
+            {"role": "user", "content": "Кто ты?"},
+            {"role": "assistant", "content": "Я бот, который помогает продавцам отвечать, когда они не в сети."},
         ]
 
-        # Проверка кэшированных данных
         cached_info = get_cached_lot_info(chat_id)
         if cached_info:
             ru_full_lot_info = cached_info["ru_full_lot_info"]
@@ -288,35 +272,18 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
                 {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
                 {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
                 {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
-                {"role": "user", "content": "Я могу оплатить данный товар?"},
-                {"role": "assistant", "content": f"Да, конечно!"},
                 {"role": "user", "content": message_text},
             ]
         else:
             messages += [
-                {"role": "user", "content": "Я могу оплатить товар?"},
-                {"role": "assistant", "content": f"Да, конечно, вы всегда можете!"},
                 {"role": "user", "content": message_text},
             ]
-        response = generate_response(messages, model="llama3-70b-8192")
+        response = generate_response(messages, model="gpt-4o-mini")
         sanitized_response = sanitize_response(response)
         return sanitized_response
     except Exception as e:
         logger.error(f"Ошибка при создании ответа для чата {chat_id}: {e}")
         return None
-
-def message_logger(c: Cardinal, e: NewMessageEvent) -> None:
-    """
-    Логирует и обрабатывает новое сообщение.
-
-    :param c: Объект Cardinal.
-    :param e: Событие нового сообщения.
-    """
-    try:
-        message = e.message
-        handle_message(c, message.chat_id, message.text)
-    except Exception as e:
-        logger.error(f"Ошибка при обработке сообщения: {e}")
 
 def handle_message(c: Cardinal, chat_id: int, message_text: str) -> None:
     """
@@ -329,29 +296,13 @@ def handle_message(c: Cardinal, chat_id: int, message_text: str) -> None:
     ru_full_lot_info, ru_title_lot_info, price_of_lot = get_info(c, chat_id)
     response = create_response(chat_id, ru_full_lot_info, ru_title_lot_info, price_of_lot, message_text, SETTINGS["prompt"])
 
-    if ru_full_lot_info:
-        log_lot_info(ru_full_lot_info, ru_title_lot_info, price_of_lot)
-
     c.send_message(chat_id, response)
-
-def log_lot_info(ru_full_lot_info: str, ru_title_lot_info: str, price_of_lot: str) -> None:
-    """
-    Логирует информацию о лоте.
-
-    :param ru_full_lot_info: Полная информация о лоте.
-    :param ru_title_lot_info: Название лота.
-    :param price_of_lot: Цена лота.
-    """
-    logger.info(f"лот {ru_full_lot_info}")
-    logger.info(f"опис {ru_title_lot_info}")
-    logger.info(f"цена {price_of_lot}")
 
 def contains_url(text: str) -> bool:
     """
-    Есть ли ссылки в тексте, если да - удаляем
+    Есть ли ссылки в тексте
     """
-    url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-    return re.search(url_pattern, text) is not None
+    return "http" in text or "https" in text
 
 def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
     """
@@ -362,7 +313,6 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
     """
     try:
         if SETTINGS["send_response"]:
-            # Проверка на черный список
             if e.message.chat_name in c.blacklist:
                 if SETTINGS['black_list_handle'] == False:
                     logger.info(f"{e.message.chat_name} в ЧС!")
@@ -371,24 +321,16 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
             msg = e.message
             msg = msg.text.lower()
 
-            # Проверка на логирование информации о сообщении
             if not log_message_info(c, msg):
                 return
-
-            # Игнорирование сообщений, начинающихся с определенных символов или слов
-            if msg.text.startswith(("!", "/", "https://", "t.me", "#", "да", "+", "Да", "дА", 'no', '-', "нет")):
-                return
             
-            # Проверка на длину сообщения и количество слов --> если сообщение слишком короткое, не отвечаем на него
-            if len(msg.text) < 10 or len(msg.text.split()) < 2:
+            if len(msg) < 10 or len(msg.split()) < 2:
                 return
 
-            # Добавляем проверку на наличие ссылки в сообщении
-            if contains_url(msg.text):
+            if contains_url(msg):
                 return
 
-            # Логирование информации о сообщении
-            message_logger(c, e)
+            handle_message(c, e.message.chat_id, msg)
     except Exception as e:
         logger.error(e)
 
@@ -408,20 +350,6 @@ def parse_lot_id(url: str) -> Optional[str]:
         logger.error(f"Ошибка при разборе URL: {e}")
         return None
 
-def get_lot_fields(cardinal, lot_id: str) -> Optional[dict]:
-    """
-    Получает данные лота по идентификатору.
-
-    :param cardinal: Объект cardinal для взаимодействия с API.
-    :param lot_id: Идентификатор лота.
-    :return: Словарь с данными лота, если данные найдены, иначе None.
-    """
-    try:
-        return cardinal.account.get_lot_fields(lot_id)
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при получении данных лота: {e}")
-        return None
-
 def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Получает информацию о лоте.
@@ -430,7 +358,7 @@ def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[
     :param lot_id: Идентификатор лота.
     :return: Кортеж, содержащий описание, название и цену лота. Если данные не найдены, возвращаются None.
     """
-    lot_data = get_lot_fields(cardinal, lot_id)
+    lot_data = cardinal.account.get_lot_fields(lot_id)
     if lot_data:
         description = lot_data.get('description_ru')
         title = lot_data.get('title_ru')
@@ -445,20 +373,6 @@ def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[
         logger.error(f"Не удалось получить данные лота для lot_id: {lot_id}")
         return None, None, None
 
-def get_user_chat_data(cardinal, chat_id: int) -> Optional[dict]:
-    """
-    Получает данные чата пользователя по идентификатору чата.
-
-    :param cardinal: Объект cardinal для взаимодействия с API.
-    :param chat_id: Идентификатор чата.
-    :return: Словарь с данными чата, если данные найдены, иначе None.
-    """
-    try:
-        return cardinal.account.get_chat(chat_id)
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при получении данных чата: {e}")
-        return None
-
 def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Получает информацию о лоте, который просматривает пользователь в чате.
@@ -468,7 +382,7 @@ def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Opti
     :return: Кортеж, содержащий полную информацию о лоте, название лота и цену. Если данные не найдены, возвращаются None.
     """
     try:
-        user_data = get_user_chat_data(cardinal, chat_id)
+        user_data = cardinal.account.get_chat(chat_id)
 
         if not user_data:
             logger.error(f"Не удалось получить данные пользователя для chat_id: {chat_id}")
@@ -490,7 +404,6 @@ def init(c: Cardinal):
     tg = c.telegram
     bot = tg.bot
 
-    #проверяем можно ли обновиться до новой версии
     can_update = check_if_need_update()
     if can_update:
         bot.send_message(c.telegram.authorized_users[0], f'🚨 Внимание!\nДоступно обновление плагина {LOGGER_PREFIX}, перейдите в настройки плагина чтобы обновить его')
@@ -518,12 +431,9 @@ def init(c: Cardinal):
     def settings(call: telebot.types.CallbackQuery) -> None:
         try:
             keyboard = K()
-
-            # Кнопка быстрого изменения
             keyboard.add(B("🚧 Изменить PROMPT", callback_data=CBT_PROMPT_CHANGE))
             keyboard.add(B("🚧 Изменить api_key", callback_data=CBT_API_CHANGE))
 
-            # Helper function to create icon buttons
             def create_icon_button(label, setting_key, switch_key):
                 icon = CHECK_MARK if SETTINGS[setting_key] else CROSS_MARK
                 return [
@@ -531,16 +441,12 @@ def init(c: Cardinal):
                     B(icon, callback_data=f"{CBT_SWITCH}:{switch_key}_icon")
                 ]
 
-            # Настройка отправки ответа
             keyboard.row(*create_icon_button("Включен:", 'send_response', 'send_response'))
 
-            # Настройка дескриптора черного списка
             keyboard.row(*create_icon_button("Отвечать ЧСникам:", 'black_list_handle', 'black_list_handle'))
 
-            # Кнопка "Проверить обновления"
             keyboard.row(B("🔄 Проверить обновления", callback_data=CHECK_UPDATES))
 
-            # Кнопка "Назад"
             keyboard.row(B("◀️ Назад", callback_data=f"{CBT.EDIT_PLUGIN}:{UUID}:0"))
 
             message_text = (
@@ -629,22 +535,16 @@ def init(c: Cardinal):
         except Exception as e:
             bot.delete_message(message.chat.id, message.id)
 
-    #Менять промпт
     tg.cbq_handler(edit_prompt, lambda c: CBT_PROMPT_CHANGE in c.data)
     tg.msg_handler(edited_prompt, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
-    #Groq api
     tg.cbq_handler(edit_api, lambda c: CBT_API_CHANGE in c.data)
     tg.msg_handler(edited_api, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_API_EDITED}"))
-    #Переключатели
     tg.cbq_handler(toggle_send_response, lambda c: f"{CBT_SWITCH}:send_response" in c.data)
     tg.cbq_handler(toggle_handle_black_listed_users, lambda c: f"{CBT_SWITCH}:black_list_handle" in c.data)
-    #Сеттингс
     tg.cbq_handler(switch, lambda c: CBT_SWITCH in c.data)
     tg.cbq_handler(settings, lambda c: f"{CBT.PLUGIN_SETTINGS}:{UUID}" in c.data)
-    #Updates
     tg.cbq_handler(handle_update, lambda c: CHECK_UPDATES in c.data)
 
-#Бинды
 BIND_TO_NEW_MESSAGE = [bind_to_new_message]
 BIND_TO_DELETE = None
 BIND_TO_PRE_INIT = [init]
