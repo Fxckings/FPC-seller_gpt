@@ -19,6 +19,9 @@ from urllib.parse import urlparse, parse_qs # type: ignore
 from locales.localizer import Localizer # type: ignore
 from tg_bot import CBT # type: ignore
 from pip._internal.cli.main import main
+from functools import lru_cache
+from typing import Optional, Tuple
+import hashlib
 
 try:
     from g4f.client import Client # type: ignore
@@ -211,31 +214,62 @@ def sanitize_response(response: str) -> str:
     return response
 
 RESPONSE_CACHE = {}
+
+def create_cache_key(messages: list, model: str) -> str:
+    """
+    Создает компактный хеш-ключ для кеширования на основе сообщений и модели.
+    
+    :param messages: Список сообщений
+    :param model: Название модели
+    :return: Строка хеш-ключа
+    """
+    message_str = json.dumps(
+        [(msg['role'], msg['content']) for msg in sorted(messages, key=lambda x: x['role'])],
+        sort_keys=True
+    )
+    
+    key = hashlib.md5(f"{model}:{message_str}".encode()).hexdigest()
+    return key
+
+@lru_cache(maxsize=1024)
+def get_cached_response(cache_key: str) -> Optional[str]:
+    """
+    Получает кешированный ответ по ключу.
+    
+    :param cache_key: Ключ кеша
+    :return: Кешированный ответ или None
+    """
+    return RESPONSE_CACHE.get(cache_key)
+
 def generate_response(messages: list, model: str) -> Optional[str]:
     """
     Генерирует ответ от модели на основе предоставленных сообщений.
-
-    :param messages: Список сообщений для модели.
-    :param model: Модель для использования.
-    :return: Сгенерированный ответ или None в случае ошибки.
+    
+    :param messages: Список сообщений для модели
+    :param model: Модель для использования
+    :return: Сгенерированный ответ или None в случае ошибки
     """
     try:
-        key = str((model, tuple(sorted(messages, key=lambda x: x['role']))))
-        if key in RESPONSE_CACHE:
-            return RESPONSE_CACHE[key]
+        cache_key = create_cache_key(messages, model)
+        
+        cached_response = get_cached_response(cache_key)
+        if cached_response is not None:
+            logger.debug(f"Using cached response: {cached_response}")
+            return cached_response
 
         response = Client().chat.completions.create(
             model=model,
             messages=messages,
         )
-        RESPONSE_CACHE[key] = response.choices[0].message.content
         
-        return RESPONSE_CACHE[key]
+        response_content = response.choices[0].message.content
+        RESPONSE_CACHE[cache_key] = response_content
+        
+        return response_content
         
     except Exception as e:
         logger.error(f"Error generating a response with the Groq client: {e}")
-
-    return None
+        return None
 
 def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], 
                     price_of_lot: Optional[str], message_text: str, prompt: str) -> Optional[str]:
@@ -357,9 +391,9 @@ def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[
     try:
         lot_data = cardinal.account.get_lot_fields(lot_id)
         if lot_data:
-            description = lot_data.description_ru
-            title = lot_data.title_ru
-            price = lot_data.price
+            description = getattr(lot_data, 'description_ru', None)
+            title = getattr(lot_data, 'title_ru', None)
+            price = getattr(lot_data, 'price', None)
 
             logger.info(f"Название: {title}")
             logger.info(f"Описание: {description}")
