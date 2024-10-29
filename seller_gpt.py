@@ -47,7 +47,6 @@ CREDITS = "@cloudecode"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
 SETTINGS_PAGE = True
 
-# Константы для иконок
 CHECK_MARK = "✅"
 CROSS_MARK = "❌"
 BELL = "🔔"
@@ -73,20 +72,9 @@ SETTINGS = {
 """
 }
 
-BAD_WORDS = {
-    'ggfunpay',
-    'zelenka',
-    'зеленка',
-    'порно',
-    'playerok',
-    'плеерок'
-}
-
 CBT_SWITCH = "CBTSWITCH"
 CBT_PROMPT_CHANGE = "NEW_PROMPT"
 CBT_PROMPT_EDITED = "PROMPT_EDITED"
-CBT_API_CHANGE = "NEW_API_GROQ"
-CBT_API_EDITED = "GROQ_API_EDITED"
 CHECK_UPDATES = "CHECK_NEW_VERVION"
 
 lot_cache: Dict[int, Dict[str, Optional[str]]] = {}
@@ -356,11 +344,10 @@ def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Opti
 def init(c: Cardinal):
     tg = c.telegram
     bot = tg.bot
-    
-    if exists("storage/plugins/GPTseller.json"):
-        with open("storage/plugins/GPTseller.json", "r", encoding="UTF-8") as f:
-            global SETTINGS
-            SETTINGS = json.loads(f.read())
+
+    with open("storage/plugins/GPTseller.json", "w", encoding="UTF-8") as f:
+        global SETTINGS
+        f.write(json.dumps(SETTINGS, indent=4, ensure_ascii=False))
 
     def save_config():
         with open("storage/plugins/GPTseller.json", "w", encoding="UTF-8") as f:
@@ -381,7 +368,6 @@ def init(c: Cardinal):
         try:
             keyboard = K()
             keyboard.add(B("🚧 Изменить PROMPT", callback_data=CBT_PROMPT_CHANGE))
-            keyboard.add(B("🚧 Изменить api_key", callback_data=CBT_API_CHANGE))
 
             def create_icon_button(label, setting_key, switch_key):
                 icon = CHECK_MARK if SETTINGS[setting_key] else CROSS_MARK
@@ -467,27 +453,8 @@ def init(c: Cardinal):
         except Exception as e:
             bot.delete_message(message.chat.id, message.id)
 
-    def edit_api(call: telebot.types.CallbackQuery):
-        if call.data!= f"{CBT.PLUGIN_SETTINGS}:{UUID}:0":
-            msg = bot.send_message(call.message.chat.id, f"Введите новый API-KEY:")
-            bot.register_next_step_handler(msg, edited_api)
-
-    def edited_api(message: telebot.types.Message):
-        try:
-            new_api_key = message.text
-            SETTINGS["api_key"] = new_api_key
-            save_config()
-            tg.clear_state(message.chat.id, message.from_user.id, True)
-            keyboard = K()
-            keyboard.add(B("◀️ Назад", callback_data=f"{CBT.PLUGIN_SETTINGS}:{UUID}:0"))
-            bot.reply_to(message, f"🟢 Новый API-KEY установлен: <code>{new_api_key}</code>", reply_markup=keyboard)
-        except Exception as e:
-            bot.delete_message(message.chat.id, message.id)
-
     tg.cbq_handler(edit_prompt, lambda c: CBT_PROMPT_CHANGE in c.data)
     tg.msg_handler(edited_prompt, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_PROMPT_EDITED}"))
-    tg.cbq_handler(edit_api, lambda c: CBT_API_CHANGE in c.data)
-    tg.msg_handler(edited_api, func=lambda m: tg.check_state(m.chat.id, m.from_user.id, f"{CBT_API_EDITED}"))
     tg.cbq_handler(toggle_send_response, lambda c: f"{CBT_SWITCH}:send_response" in c.data)
     tg.cbq_handler(toggle_handle_black_listed_users, lambda c: f"{CBT_SWITCH}:black_list_handle" in c.data)
     tg.cbq_handler(switch, lambda c: CBT_SWITCH in c.data)
