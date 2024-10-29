@@ -220,7 +220,7 @@ def generate_response(messages: list, model: str) -> Optional[str]:
     :return: Сгенерированный ответ или None в случае ошибки.
     """
     try:
-        key = str((model, tuple(sorted(messages))))
+        key = str((model, tuple(sorted(messages, key=lambda x: x['role']))))
         if key in RESPONSE_CACHE:
             return RESPONSE_CACHE[key]
 
@@ -380,12 +380,12 @@ def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Opti
     try:
         user_data = cardinal.account.get_chat(chat_id)
 
-        if not user_data:
+        if not user_data or not hasattr(user_data, 'looking_link'):
             logger.error(f"Не удалось получить данные пользователя для chat_id: {chat_id}")
             return None, None, None
 
-        if user_data.get('looking_link'):
-            lot_id = parse_lot_id(user_data['looking_link'])
+        if user_data.looking_link:
+            lot_id = parse_lot_id(user_data.looking_link)
             if lot_id:
                 logger.info(f"Пользователь просматривает лот: {lot_id}")
                 return get_lot_information(cardinal, lot_id)
