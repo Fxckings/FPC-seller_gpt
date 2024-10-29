@@ -13,9 +13,8 @@ import logging
 from os.path import exists
 import telebot # type: ignore
 import json
-import os, re 
+import os
 from telebot.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B # type: ignore
-from urllib.parse import urlparse, parse_qs # type: ignore
 from locales.localizer import Localizer # type: ignore
 from tg_bot import CBT # type: ignore
 from pip._internal.cli.main import main
@@ -42,7 +41,7 @@ DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
 
-0.0.8 - sigma update
+0.0.8 - более умный бот.
 """
 CREDITS = "@cloudecode"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -63,14 +62,13 @@ SETTINGS = {
 
 Твои задачи:
 
-Кратко и чётко отвечать на вопросы покупателей на русском языке
-Помогать с выбором товаров
-Решать проблемы с заказами
-Объяснять правила и механики работы сайта
-Не рекламировать и не упоминать другие торговые площадки
-Честно признавать, если чего-то не знаю
-Соблюдать вежливость и профессионализм
-Защищать интересы как покупателей, так и продавцов
+Кратко и чётко отвечать на вопросы покупателей на русском языке.
+Помогать с выбором товаров.
+Решать проблемы с заказами.
+Не рекламировать и не упоминать другие торговые площадки.
+Соблюдать вежливость и профессионализм.
+Защищать интересы как покупателей, так и продавцов.
+Не выходить за границы правил, не упоминать лишнего.
 
 """
 }
@@ -92,16 +90,6 @@ CBT_API_EDITED = "GROQ_API_EDITED"
 CHECK_UPDATES = "CHECK_NEW_VERVION"
 
 lot_cache: Dict[int, Dict[str, Optional[str]]] = {}
-
-def cache_lot_info(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_info: Optional[str], price_of_lot: Optional[str]):
-    try:
-        lot_cache[chat_id] = {
-            "ru_full_lot_info": ru_full_lot_info,
-            "ru_title_lot_info": ru_title_lot_info,
-            "price_of_lot": price_of_lot
-        }
-    except Exception as e:
-        logger.error(e)
 
 def get_latest_release_info(github_repo: str) -> Optional[dict]:
     try:
@@ -171,50 +159,7 @@ def check_if_need_update() -> bool:
 def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
     return lot_cache.get(chat_id)
 
-def load_file(file_path: str) -> Union[List, Dict, None]:
-    try:
-        with open(file_path, 'rb') as f:
-            return json.loads(f.read().decode('utf-8'))
-    except Exception as e:
-        logger.error(f"Непредвиденная ошибка при загрузке данных из файла {file_path}: {e}")
-    return None
-
-def log_message_info(c: Cardinal, message) -> bool:
-    """
-    логирует информацию о сообщении
-
-    :param c: The Cardinal instance.
-    :param message: The message to log.
-    :return: True if the message was logged successfully, False otherwise.
-    """
-    try:
-        bot_username = c.account.username
-        logger.info(f"Автор сообщения: {message.author}, Имя текущего бота: {bot_username}")
-
-        if message.type != MessageTypes.NON_SYSTEM or message.author_id == c.account.id:
-            return False
-
-        logger.info(f"Новое сообщение получено: {message.text}")
-        return True
-    except Exception as e:
-        logger.error(e)
-        return False
-
-def sanitize_response(response: str) -> str:
-    """
-    Удалите ненужные символы, ссылки и сообщения из ответа.
-
-    :param response: The original response text.
-    :return: The cleaned response text.
-    """
-    response = re.sub(r'[*\#№%/@$%^&<>[\]]', '', response)
-    response = re.sub(r'\b({})\b'.format('|'.join(BAD_WORDS)), '', response)
-    response = re.sub(r'(http[s]?://\S+|<br>|<h1>|<h2>|<h3>|<p>|</p>)', '', response)
-
-    return response
-
-RESPONSE_CACHE = {}
-
+RESPONSE_CACHE: Dict = {}
 def create_cache_key(messages: list, model: str) -> str:
     """
     Создает компактный хеш-ключ для кеширования на основе сообщений и модели.
@@ -250,22 +195,24 @@ def generate_response(messages: list, model: str) -> Optional[str]:
     :return: Сгенерированный ответ или None в случае ошибки
     """
     try:
-        cache_key = create_cache_key(messages, model)
-        
-        cached_response = get_cached_response(cache_key)
-        if cached_response is not None:
-            logger.debug(f"Using cached response: {cached_response}")
-            return cached_response
+        for _ in range(3):
+            cache_key = create_cache_key(messages, model)
+            
+            cached_response = get_cached_response(cache_key)
+            if cached_response is not None:
+                logger.debug(f"Using cached response: {cached_response}")
+                return cached_response
 
-        response = Client().chat.completions.create(
-            model=model,
-            messages=messages,
-        )
-        
-        response_content = response.choices[0].message.content
-        RESPONSE_CACHE[cache_key] = response_content
-        
-        return response_content
+            response = Client().chat.completions.create(
+                model=model,
+                messages=messages,
+            )
+            response_content = response.choices[0].message.content
+            if response_content in ["⁡Request ended with status code 403"]:
+                continue
+
+            RESPONSE_CACHE[cache_key] = response_content
+            return response_content
         
     except Exception as e:
         logger.error(f"Error generating a response with the Groq client: {e}")
@@ -287,10 +234,7 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
     try:
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": "Я могу оплатить данный товар?"},
-            {"role": "assistant", "content": f"Да, конечно!"},
-            {"role": "user", "content": "Кто ты?"},
-            {"role": "assistant", "content": "Я бот, который помогает продавцам отвечать, когда они не в сети."},
+            {"role": "user", "content": message_text},
         ]
 
         cached_info = get_cached_lot_info(chat_id)
@@ -298,23 +242,16 @@ def create_response(chat_id: int, ru_full_lot_info: Optional[str], ru_title_lot_
             ru_full_lot_info = cached_info["ru_full_lot_info"]
             ru_title_lot_info = cached_info["ru_title_lot_info"]
             price_of_lot = cached_info["price_of_lot"]
-        else:
-            cache_lot_info(chat_id, ru_full_lot_info, ru_title_lot_info, price_of_lot)
 
         if ru_full_lot_info:
-            messages += [
-                {"role": "assistant", "content": f"🔍 Название лота: {ru_title_lot_info}"},
-                {"role": "assistant", "content": f"📝 Описание лота: {ru_full_lot_info}"},
-                {"role": "assistant", "content": f"Цена товара: {price_of_lot}₽"},
-                {"role": "user", "content": message_text},
-            ]
-        else:
-            messages += [
-                {"role": "user", "content": message_text},
-            ]
-        response = generate_response(messages, model="gpt-4o-mini")
-        sanitized_response = sanitize_response(response)
-        return sanitized_response
+            logger.info(f"Пользователь просматривает лот: {ru_title_lot_info}")
+            messages.append({"role": "system", "content": f"🔍 Название лота: {ru_title_lot_info}"})
+            messages.append({"role": "system", "content": f"📝 Описание лота: {ru_full_lot_info}"})
+            messages.append({"role": "system", "content": f"Цена товара: {price_of_lot}₽"})
+
+        return generate_response(messages, model="gpt-4o-mini")
+
+    
     except Exception as e:
         logger.error(f"Ошибка при создании ответа для чата {chat_id}: {e}")
         return None
@@ -354,8 +291,9 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
 
             msg = e.message
 
-            if not log_message_info(c, msg):
+            if e.message.type != MessageTypes.NON_SYSTEM or e.message.author_id == c.account.id or e.message.text == "Приглашаем вас в наш закрытый Telegram 😎":
                 return
+            
             msg = msg.text.lower()
             if contains_url(msg):
                 return
@@ -365,20 +303,8 @@ def bind_to_new_message(c: Cardinal, e: NewMessageEvent):
         logger.error(e)
 
 def parse_lot_id(url: str) -> Optional[str]:
-    """
-    Парсит идентификатор лота из URL.
-
-    :param url: Строка URL для парсинга.
-    :return: Идентификатор лота, если он найден, иначе None.
-    """
-    try:
-        parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query)
-        lot_id = query_params.get('id', [None])[0]
-        return lot_id
-    except Exception as e:
-        logger.error(f"Ошибка при разборе URL: {e}")
-        return None
+    """Parses lot ID from URL"""
+    return url.split('?id=')[-1] if '?id=' in url else None
 
 def get_lot_information(cardinal, lot_id: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
