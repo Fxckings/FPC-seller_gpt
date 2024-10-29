@@ -36,12 +36,12 @@ LOGGER_PREFIX = "ChatGPT-Seller"
 logger.info(f"{LOGGER_PREFIX} Активен")
 
 NAME = "ChatGPT-Seller"
-VERSION = "0.0.8"
+VERSION = "0.0.9"
 DESCRIPTION = """
 Плагин, чтобы чат-гпт отвечал за вас, так-как вы можете быть заняты хз:)
 _CHANGE LOG_
 
-0.0.8 - более умный бот.
+0.0.9 - более умный бот.
 """
 CREDITS = "@cloudecode"
 UUID = "a707de90-d0b5-4fc6-8c42-83b3e0506c73"
@@ -148,13 +148,6 @@ def get_latest_release_assets(github_repo: str) -> Optional[Tuple[str, List[dict
     except requests.RequestException as e:
         logger.error(f"Failed to get the latest release info: {e}")
         return None
-
-def check_if_need_update() -> bool:
-    try:
-        release_info = get_latest_release_info("alex117815/FPC-seller_gpt")
-        return release_info and release_info['tag_name'] > VERSION
-    except Exception:
-        return False
 
 def get_cached_lot_info(chat_id: int) -> Optional[Dict[str, Optional[str]]]:
     return lot_cache.get(chat_id)
@@ -363,11 +356,7 @@ def get_info(cardinal, chat_id: int) -> Tuple[Optional[str], Optional[str], Opti
 def init(c: Cardinal):
     tg = c.telegram
     bot = tg.bot
-
-    can_update = check_if_need_update()
-    if can_update:
-        bot.send_message(c.telegram.authorized_users[0], f'🚨 Внимание!\nДоступно обновление плагина {LOGGER_PREFIX}, перейдите в настройки плагина чтобы обновить его')
-
+    
     if exists("storage/plugins/GPTseller.json"):
         with open("storage/plugins/GPTseller.json", "r", encoding="UTF-8") as f:
             global SETTINGS
