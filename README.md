@@ -40,8 +40,8 @@ pip install -r plugins/requirements.txt
 
 ## Архитектура
 ```
+ai.py              # Точка входа плагина
 ai_assistant/
-├── plugin.py              # Точка входа плагина
 ├── core/
 │   ├── config.py         # Управление конфигурацией
 │   ├── ai_manager.py     # LangChain интеграция
