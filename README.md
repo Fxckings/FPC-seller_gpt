@@ -16,7 +16,7 @@ AI-ассистент для автоматических ответов пок�
 1. Скопируйте папку `ai_assistant` в `plugins/`
 2. Установите зависимости:
 ```bash
-pip install -r plugins/ai_assistant/requirements.txt
+pip install -r plugins/requirements.txt
 ```
 
 3. Получите API ключ:
